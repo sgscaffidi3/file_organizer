@@ -1,0 +1,17 @@
+{
+    "paths": {
+        "source_directory": "C:/family/dad/personal_media",
+        "output_directory": "./organized_media_output"
+    },
+    "organization": {
+        "rename_on_copy": true,
+        "date_format": "%Y/%Y-%m-%d",
+        "deduplication_strategy": "KEEP_OLDEST" 
+    },
+    "file_groups": {
+        "IMAGE": [".jpg", ".jpeg", ".png", ".gif", ".tiff", ".raw", ".heic", ".webp"],
+        "VIDEO": [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".3gp", ".webm"],
+        "AUDIO": [".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg"],
+        "DOCUMENT": [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".csv"]
+    }
+}
