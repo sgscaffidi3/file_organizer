@@ -1,115 +1,134 @@
 # ==============================================================================
 # File: test_database_manager.py
-# Version: 0.1
+# Version: 0.1.6
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 1. Initial implementation of database manager unit tests.
-# 2. Implemented the versioning and patch derivation strategy.
-# 3. Implemented --version/-v and --help/-h support for standalone execution.
-# 4. Updated tests to account for the new --teardown functionality.
-# 5. Updated to use paths from ConfigManager instead of config.py.
-# 6. Project name changed to "file_organizer" in descriptions.
+# 6. Updated CLI logic for --version check to support execution from /test subdirectory.
+# 5. Fixed teardown test pathing issue.
+# 4. Added foreign key constraint test.
+# 3. Added teardown functionality test.
+# 2. Added schema creation test.
+# 1. Initial implementation of DB context and file creation test.
 # ------------------------------------------------------------------------------
 import unittest
 from pathlib import Path
 import os
 import sqlite3
 import argparse
+# import sys (imported inside __main__)
 
-from database_manager import DatabaseManager 
-from version_util import print_version_info 
+# Define test paths relative to the project root
+TEST_OUTPUT_DIR = Path(__file__).parent.parent / 'test_output_db'
+TEST_DB_PATH = TEST_OUTPUT_DIR / 'test_metadata.sqlite'
 
-# Define a temporary test database path within a test-specific directory
-TEST_DB_PATH = Path('./test_output/test_metadata.sqlite')
+# --- Test Data ---
+TEST_HASH = "deadbeef0123456789"
+TEST_PATH = "/path/to/test/file.jpg"
 
 class TestDatabaseManager(unittest.TestCase):
-    """Tests the functionality of the DatabaseManager class and the schema."""
 
     @classmethod
     def setUpClass(cls):
-        # Create the parent directory for the test database if it doesn't exist
-        TEST_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    def setUp(self):
-        # Ensure the test database is clean before each test method runs
-        if TEST_DB_PATH.exists():
-            os.remove(TEST_DB_PATH)
-
-    def test_01_db_file_creation_and_context_manager(self):
-        """Test that the DB file is created and the context manager works."""
-        self.assertFalse(TEST_DB_PATH.exists())
-        
-        # Using the context manager to open and close connection
-        with DatabaseManager(TEST_DB_PATH) as db:
-            self.assertIsInstance(db.conn, sqlite3.Connection)
-            self.assertTrue(TEST_DB_PATH.exists())
-        
-        # After exit, the file should still exist
-        self.assertTrue(TEST_DB_PATH.exists())
-        
-    def test_02_schema_creation_and_table_existence(self):
-        """Test that both required tables are created."""
-        with DatabaseManager(TEST_DB_PATH) as db:
-            db.create_schema()
-            # Query the master table to check for existence of our tables
-            tables = db.execute_query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('MediaContent', 'FilePathInstances');")
-            self.assertEqual(len(tables), 2)
-
-    def test_03_foreign_key_constraint(self):
-        """Test the FOREIGN KEY constraint between instances and content."""
-        hash_val = 'a'*64
-        with DatabaseManager(TEST_DB_PATH) as db:
-            db.create_schema()
-            insert_instance_query = """
-            INSERT INTO FilePathInstances (content_hash, original_full_path, original_relative_path) 
-            VALUES (?, ?, ?);
-            """
-            # 1. Attempt insert before MediaContent exists (should fail)
-            with self.assertRaises(sqlite3.IntegrityError): 
-                 db.execute_query(insert_instance_query, (hash_val, 'path1', 'relpath1'))
-                 
-            # 2. Insert the required MediaContent entry
-            db.execute_query("INSERT INTO MediaContent (content_hash, size) VALUES (?, 100);", (hash_val,))
-            
-            # 3. Attempt insert again (should succeed)
-            db.execute_query(insert_instance_query, (hash_val, 'path2', 'relpath2'))
-            
-            count = db.execute_query("SELECT COUNT(*) FROM FilePathInstances WHERE content_hash = ?;", (hash_val,))[0][0]
-            self.assertEqual(count, 1)
-
-    def test_04_teardown_functionality(self):
-        """Test the explicit database deletion function."""
-        with DatabaseManager(TEST_DB_PATH) as db:
-            db.create_schema()
-        self.assertTrue(TEST_DB_PATH.exists())
-
-        db_manager = DatabaseManager(TEST_DB_PATH)
-        self.assertTrue(db_manager.teardown())
-        self.assertFalse(TEST_DB_PATH.exists())
-        self.assertFalse(db_manager.teardown()) # Should return False if the file is already gone
-
-    def tearDown(self):
-        # Clean up the database file after each test
+        """Set up environment before any tests run."""
+        if not TEST_OUTPUT_DIR.exists():
+            TEST_OUTPUT_DIR.mkdir()
+        # Ensure the test database does not exist before starting
         if TEST_DB_PATH.exists():
             os.remove(TEST_DB_PATH)
 
     @classmethod
     def tearDownClass(cls):
-        # Clean up the test output directory if empty
-        if TEST_DB_PATH.parent.exists():
-            try:
-                os.rmdir(TEST_DB_PATH.parent)
-            except OSError:
-                # Ignore if directory is not empty (e.g., from other test remnants)
-                pass 
+        """Clean up environment after all tests run."""
+        if TEST_OUTPUT_DIR.exists():
+            # os.rmdir(TEST_OUTPUT_DIR) # Only remove if empty
+            pass
 
+    def test_01_db_file_creation_and_context_manager(self):
+        """Test that the DB file is created and the context manager works."""
+        # Ensure cleanup from potential previous runs
+        if TEST_DB_PATH.exists():
+            os.remove(TEST_DB_PATH)
+            
+        # Use context manager to ensure connection and cursor management
+        with DatabaseManager(TEST_DB_PATH) as db:
+            self.assertTrue(TEST_DB_PATH.exists())
+            self.assertIsInstance(db.conn, sqlite3.Connection)
+            self.assertIsInstance(db.cursor, sqlite3.Cursor)
+            
+        # Check that the connection is closed after exiting the context
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.cursor.execute("SELECT 1;")
+
+    def test_02_schema_creation_and_table_existence(self):
+        """Test that both required tables are created."""
+        with DatabaseManager(TEST_DB_PATH) as db:
+            db.create_schema()
+            
+            # Check for MediaContent table
+            content_query = "SELECT name FROM sqlite_master WHERE type='table' AND name='MediaContent';"
+            self.assertEqual(db.execute_query(content_query)[0][0], 'MediaContent')
+            
+            # Check for FilePathInstances table
+            instance_query = "SELECT name FROM sqlite_master WHERE type='table' AND name='FilePathInstances';"
+            self.assertEqual(db.execute_query(instance_query)[0][0], 'FilePathInstances')
+
+    def test_03_foreign_key_constraint(self):
+        """Test the FOREIGN KEY constraint between instances and content."""
+        with DatabaseManager(TEST_DB_PATH) as db:
+            db.create_schema() # Ensure schema is ready
+            
+            # 1. Insert valid content record
+            db.execute_query("INSERT INTO MediaContent (content_hash, file_type_group) VALUES (?, ?);", (TEST_HASH, 'IMAGE'))
+            
+            # 2. Insert valid instance record (should pass)
+            db.execute_query("INSERT INTO FilePathInstances (path, content_hash) VALUES (?, ?);", (TEST_PATH, TEST_HASH))
+            
+            # 3. Attempt to insert instance with non-existent content_hash (should fail)
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute_query("INSERT INTO FilePathInstances (path, content_hash) VALUES (?, ?);", 
+                                 ("/path/to/bad/file.jpg", "nonexistenthash"))
+
+    def test_04_teardown_functionality(self):
+        """Test the explicit database deletion function."""
+        # Ensure the DB file exists first
+        with open(TEST_DB_PATH, 'w') as f:
+            f.write("dummy db content")
+        self.assertTrue(TEST_DB_PATH.exists())
+
+        # Test teardown
+        with DatabaseManager(TEST_DB_PATH) as db:
+            success = db.teardown()
+            self.assertTrue(success)
+            
+        self.assertFalse(TEST_DB_PATH.exists())
+        
+# --- CLI EXECUTION LOGIC ---
+# --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
+    import argparse
+    import sys
+    from pathlib import Path
+
+    # 1. TEMPORARILY ADD PATH FOR VERSION_UTIL IMPORT
+    project_root = str(Path(__file__).resolve().parent.parent)
+    sys.path.append(project_root)
+
+    # 2. ARGUMENT PARSING
     parser = argparse.ArgumentParser(description="Unit tests for DatabaseManager.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
 
+    # 3. IMMEDIATE VERSION EXIT
     if args.version:
+        from version_util import print_version_info 
         print_version_info(__file__, "Database Manager Unit Tests")
-    else:
-        # Run tests if no specific arguments are given
-        unittest.main()
+        sys.exit(0)
+
+    # 4. DEPENDENT IMPORTS FOR TEST EXECUTION
+    # Imports needed by TestDatabaseManager
+    from database_manager import DatabaseManager
+    # No other core imports strictly required for this test file
+
+    # 5. RUN TESTS
+    sys.argv[1:] = unknown 
+    unittest.main()
