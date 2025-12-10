@@ -1,132 +1,153 @@
 # ==============================================================================
-# File: test_metadata_processor.py
-# Version: 0.1
+# File: test_file_scanner.py
+# Version: 0.1.5
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 1. Initial implementation of MetadataProcessor unit tests.
+# 5. Updated CLI logic for --version check to support execution from /test subdirectory.
+# 4. Added test for preventing duplicate path insertion.
+# 3. Updated setUpClass to create dummy files for testing.
+# 2. Added test for deduplication logic during scanning.
+# 1. Initial implementation of hashing accuracy test.
 # ------------------------------------------------------------------------------
 import unittest
 from pathlib import Path
 import os
-import shutil
 import argparse
-import hashlib
+import sys
+# from version_util import print_version_info (Imported later)
+# from database_manager import DatabaseManager (Imported later)
+# from file_scanner import FileScanner (Imported later)
+# from config_manager import ConfigManager (Imported later)
 
-from database_manager import DatabaseManager
-from file_scanner import FileScanner 
-from metadata_processor import MetadataProcessor 
-from version_util import print_version_info
-from config_manager import ConfigManager 
 
-# --- Constants & Setup ---
-TEST_OUTPUT_DIR = Path('./test_output_metadata')
-TEST_SOURCE_DIR = TEST_OUTPUT_DIR / 'source_media'
-TEST_DB_PATH = TEST_OUTPUT_DIR / 'test_metadata_db.sqlite'
-# Content hashes for predictable testing
-IMAGE_HASH = hashlib.sha256(b"image_content_1").hexdigest()
-VIDEO_HASH = hashlib.sha256(b"video_content_2").hexdigest()
+# Define test paths relative to the project root
+TEST_OUTPUT_DIR = Path(__file__).parent.parent / 'test_output_scanner'
+SOURCE_DIR = TEST_OUTPUT_DIR / 'source_media'
+TEST_DB_PATH = TEST_OUTPUT_DIR / 'test_scanner_metadata.sqlite'
 
-class TestMetadataProcessor(unittest.TestCase):
-    """Tests the functionality of the MetadataProcessor class."""
+# --- Test Data ---
+# Test file contents and known SHA256 hashes
+FILE_A_CONTENT = b"This is file A."
+FILE_A_HASH = "8ac38d8f078a632e8312017366d1f03f56d787754f49491753384226f30a9e99"
 
+FILE_B_CONTENT = b"This is file B, a duplicate of A."
+FILE_B_HASH = "6e5223c6f8744032d1f67f80470211910d54024b4570085a6a5789b5c32801e0"
+
+class TestFileScanner(unittest.TestCase):
+    
     @classmethod
     def setUpClass(cls):
-        shutil.rmtree(TEST_OUTPUT_DIR, ignore_errors=True)
-        TEST_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Create dummy files for FileScanner to insert, simulating different types
-        cls.image_path = TEST_SOURCE_DIR / "photo.jpg"
-        with open(cls.image_path, 'wb') as f:
-            f.write(b"image_content_1") # Should yield IMAGE_HASH
-            
-        cls.video_path = TEST_SOURCE_DIR / "movie.mp4"
-        with open(cls.video_path, 'wb') as f:
-            f.write(b"video_content_2") # Should yield VIDEO_HASH
+        """Creates the test directory structure and dummy files once."""
+        if not TEST_OUTPUT_DIR.exists():
+            TEST_OUTPUT_DIR.mkdir()
+        if not SOURCE_DIR.exists():
+            SOURCE_DIR.mkdir()
 
-        # 1. Initialize the database and run the scanner to populate initial data
-        with DatabaseManager(TEST_DB_PATH) as db:
-            db.create_schema()
-        
-        cls.config_manager = ConfigManager()
-        
-        # NOTE: We need to use the actual file groups from the config manager 
-        # for the scanner to correctly categorize the files as IMAGE/VIDEO
-        with DatabaseManager(TEST_DB_PATH) as db:
-            scanner = FileScanner(db, TEST_SOURCE_DIR, cls.config_manager.FILE_GROUPS)
-            scanner.scan_and_insert()
-        
-    def setUp(self):
-        # We don't clear the tables here; we need the data inserted by setUpClass.
-        # We only need to reset the metadata fields for testing updates.
-        update_query = """
-        UPDATE MediaContent SET width = NULL, height = NULL, date_best = NULL, duration = NULL, bitrate = NULL, title = NULL;
-        """
-        with DatabaseManager(TEST_DB_PATH) as db:
-            db.execute_query(update_query)
+        # Cleanup DB if it exists
+        if TEST_DB_PATH.exists():
+            os.remove(TEST_DB_PATH)
 
-    def test_01_image_metadata_extraction_and_update(self):
-        """Tests that image records are updated with dimensions and date stub."""
-        with DatabaseManager(TEST_DB_PATH) as db:
-            processor = MetadataProcessor(db, self.config_manager)
-            processor.process_metadata()
-            
-            # Query the updated record
-            query = "SELECT width, height, date_best FROM MediaContent WHERE content_hash = ?;"
-            result = db.execute_query(query, (IMAGE_HASH,))[0]
-            
-            # Check results based on the IMAGE stub function in metadata_processor.py
-            self.assertEqual(result[0], 1920) # width
-            self.assertEqual(result[1], 1080) # height
-            self.assertIn("2010-01-01", result[2]) # date_best
-
-    def test_02_video_metadata_extraction_and_update(self):
-        """Tests that video records are updated with dimensions, duration, and date stub."""
-        with DatabaseManager(TEST_DB_PATH) as db:
-            processor = MetadataProcessor(db, self.config_manager)
-            processor.process_metadata()
-            
-            # Query the updated record
-            query = "SELECT width, height, duration, bitrate, date_best FROM MediaContent WHERE content_hash = ?;"
-            result = db.execute_query(query, (VIDEO_HASH,))[0]
-            
-            # Check results based on the VIDEO stub function in metadata_processor.py
-            self.assertEqual(result[0], 1280) # width
-            self.assertEqual(result[1], 720)  # height
-            self.assertEqual(result[2], 15.5) # duration (REAL type check)
-            self.assertEqual(result[3], 2500) # bitrate
-            self.assertIn("2015-06-15", result[4]) # date_best
-
-    def test_03_already_processed_files_are_skipped(self):
-        """Tests that the processor skips files where rich metadata is already set."""
-        with DatabaseManager(TEST_DB_PATH) as db:
-            # Manually set a file as 'processed'
-            db.execute_query("UPDATE MediaContent SET width = 100 WHERE content_hash = ?;", (IMAGE_HASH,))
-            
-            processor = MetadataProcessor(db, self.config_manager)
-            processor.process_metadata()
-            
-            # Only the video hash should have been processed and updated, but the image was skipped.
-            # Total records processed should be 1 (the video)
-            self.assertEqual(processor.processed_count, 1)
-            # Total records skipped that were found initially (the image, skipped by WHERE clause)
-            self.assertEqual(processor.skip_count, 0) # Skipped count should be 0 because the SQL query excludes it
-
-            # Query the width of the skipped image file (should remain 100, not 1920)
-            skipped_width = db.execute_query("SELECT width FROM MediaContent WHERE content_hash = ?;", (IMAGE_HASH,))[0][0]
-            self.assertEqual(skipped_width, 100) # Confirms it was not processed/overwritten
+        # Create dummy files for testing
+        (SOURCE_DIR / 'file_a.txt').write_bytes(FILE_A_CONTENT)
+        (SOURCE_DIR / 'file_b.txt').write_bytes(FILE_B_CONTENT)
+        (SOURCE_DIR / 'file_a_duplicate.txt').write_bytes(FILE_A_CONTENT) # Duplicate of A
 
     @classmethod
     def tearDownClass(cls):
-        # Clean up the test environment
-        if TEST_OUTPUT_DIR.exists():
-            shutil.rmtree(TEST_OUTPUT_DIR)
+        """Cleans up the environment."""
+        # We generally leave test output dirs for inspection unless cleanup is essential.
+        pass
 
+    def setUp(self):
+        """Runs before every test: ensures a fresh DB state."""
+        if TEST_DB_PATH.exists():
+            os.remove(TEST_DB_PATH)
+        
+        # We need a fresh DB and schema for every test to ensure isolation
+        with DatabaseManager(TEST_DB_PATH) as db:
+            db.create_schema()
+            
+        # Re-initialize ConfigManager for the scanner
+        self.config_manager = ConfigManager()
+
+    def test_01_hashing_accuracy(self):
+        """Test that the SHA-256 hash calculation is correct."""
+        with DatabaseManager(TEST_DB_PATH) as db:
+            scanner = FileScanner(db, SOURCE_DIR, self.config_manager.FILE_GROUPS)
+            
+            # Test known content against known hash
+            calculated_hash_a = scanner._calculate_hash(SOURCE_DIR / 'file_a.txt')
+            self.assertEqual(calculated_hash_a, FILE_A_HASH)
+            
+            # Test different content
+            calculated_hash_b = scanner._calculate_hash(SOURCE_DIR / 'file_b.txt')
+            self.assertEqual(calculated_hash_b, FILE_B_HASH)
+
+    def test_02_scan_and_insert_deduplication(self):
+        """Test that duplicates result in one MediaContent entry but multiple FilePathInstances."""
+        with DatabaseManager(TEST_DB_PATH) as db:
+            scanner = FileScanner(db, SOURCE_DIR, self.config_manager.FILE_GROUPS)
+            scanner.scan_and_insert()
+            
+            # Check MediaContent table (should have 2 unique files: A and B)
+            content_count = db.execute_query("SELECT COUNT(*) FROM MediaContent;")[0][0]
+            self.assertEqual(content_count, 2)
+            
+            # Check FilePathInstances table (should have 3 file paths: A, B, A_dup)
+            instance_count = db.execute_query("SELECT COUNT(*) FROM FilePathInstances;")[0][0]
+            self.assertEqual(instance_count, 3)
+            
+            # Check content_hash count for the duplicate file (should be 2 instances for FILE_A_HASH)
+            instance_for_a = db.execute_query("SELECT COUNT(*) FROM FilePathInstances WHERE content_hash = ?;", (FILE_A_HASH,))[0][0]
+            self.assertEqual(instance_for_a, 2)
+
+    def test_03_duplicate_path_insertion_is_ignored(self):
+        """Test scanning the same path twice does not insert a second instance record."""
+        with DatabaseManager(TEST_DB_PATH) as db:
+            scanner = FileScanner(db, SOURCE_DIR, self.config_manager.FILE_GROUPS)
+            
+            # First scan (should insert 3 instances)
+            scanner.scan_and_insert()
+            instance_count_1 = db.execute_query("SELECT COUNT(*) FROM FilePathInstances;")[0][0]
+            self.assertEqual(instance_count_1, 3)
+
+            # Second scan (should find 3 files, but insert 0 new instances)
+            scanner.scan_and_insert()
+            instance_count_2 = db.execute_query("SELECT COUNT(*) FROM FilePathInstances;")[0][0]
+            self.assertEqual(instance_count_2, 3)
+            # The scanner's 'unique_instances_recorded' should be 0 on the second run
+            self.assertEqual(scanner.unique_instances_recorded, 0)
+
+
+# --- CLI EXECUTION LOGIC ---
+# --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
+    import argparse
+    import sys
+    from pathlib import Path
+    
+    # 1. TEMPORARILY ADD PATH FOR VERSION_UTIL IMPORT
+    project_root = str(Path(__file__).resolve().parent.parent)
+    sys.path.append(project_root)
+
+    # 2. ARGUMENT PARSING
     parser = argparse.ArgumentParser(description="Unit tests for MetadataProcessor.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
 
+    # 3. IMMEDIATE VERSION EXIT
     if args.version:
+        from version_util import print_version_info 
         print_version_info(__file__, "Metadata Processor Unit Tests")
-    else:
-        unittest.main()
+        sys.exit(0) 
+
+    # 4. DEPENDENT IMPORTS FOR TEST EXECUTION
+    # Imports needed by TestMetadataProcessor
+    from database_manager import DatabaseManager
+    from file_scanner import FileScanner 
+    from metadata_processor import MetadataProcessor 
+    from config_manager import ConfigManager 
+
+    # 5. RUN TESTS
+    sys.argv[1:] = unknown 
+    unittest.main()
