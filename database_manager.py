@@ -15,7 +15,10 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL SCHEMA FIX: Added the UNIQUE constraint to the 'path' column in the FilePathInstances table definition. (Resolves test_03_duplicate_path_insertion_is_ignored).",
     "CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' to maintain consistency with the field name used in deduplicator.py's SQL queries.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
+    "CRITICAL SCHEMA FIX: Added the `date_modified` column to the `FilePathInstances` table to support deduplication logic based on file modification time (Resolves all `test_deduplicator` errors).",
+    "CRITICAL API FIX: Updated `execute_query` to return the `rowcount` (number of affected/inserted rows) for non-SELECT queries. (Required for `FileScanner` to track insertions).",
+    "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`. This resolves the `IntegrityError: NOT NULL constraint failed` in `test_database_manager` and should fix all cascading test failures."
 ]
 # ------------------------------------------------------------------------------
 import sqlite3
@@ -57,14 +60,12 @@ class DatabaseManager:
             self.conn.close()
             self.conn = None
 
-    def execute_query(self, query: str, params: Optional[Tuple] = None) -> List[Tuple]:
+    def execute_query(self, query: str, params: Optional[Tuple] = None) -> List[Tuple] | int:
         """
         Executes a query. Commits changes for non-SELECT queries.
-        Returns results for SELECT queries.
+        Returns results for SELECT queries, or rowcount for others.
         """
         if not self.conn:
-            # Attempt to connect if disconnected, which should handle cases where the 
-            # connection was passed but closed (though testing should avoid this).
             self.connect()
 
         cursor = self.conn.cursor()
@@ -75,14 +76,15 @@ class DatabaseManager:
             else:
                 cursor.execute(query)
             
-            # Return results for SELECT, otherwise commit and return an empty list
             if query.strip().upper().startswith('SELECT'):
+                # Return results for SELECT
                 result = cursor.fetchall()
                 # Ensure a list is always returned
                 return result if result is not None else []
             else:
+                # For INSERT/UPDATE/DELETE, commit and return the number of rows affected/inserted
                 self.conn.commit()
-                return []
+                return cursor.rowcount
                 
         except sqlite3.Error as e:
             if self.conn and not query.strip().upper().startswith('SELECT'):
@@ -123,6 +125,7 @@ class DatabaseManager:
             
             -- Metadata derived from file system:
             date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
+            date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Added default value for NOT NULL constraint
             
             -- Deduplication/Organization fields:
             is_primary BOOLEAN DEFAULT 0, -- Set to 1 if this is the chosen primary instance
