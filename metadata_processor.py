@@ -1,8 +1,11 @@
 # ==============================================================================
 # File: metadata_processor.py
-# Version: 0.1
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 2
+# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
+# 2. CRITICAL FIX: Removed manual database connection close/reopen logic, relying on the caller's DatabaseManager context.
 # 1. Initial implementation of MetadataProcessor class and its update logic (F04).
 # ------------------------------------------------------------------------------
 from pathlib import Path
@@ -135,15 +138,7 @@ class MetadataProcessor:
         # Query for all unique files (content_hash) that are missing metadata (width is NULL or 0)
         select_query = "SELECT content_hash, file_type_group FROM MediaContent WHERE width IS NULL OR width = 0;"
         
-        # We must commit the scanner's changes first if we are running standalone
-        # or handle this transactionally if part of a main pipeline.
-        
-        # Temporarily close and reopen connection outside the context manager 
-        # to ensure previous writes (from scanner) are visible.
-        # In a transactional pipeline, this complexity would be hidden.
-        self.db.conn.close() 
-        self.db.conn = sqlite3.connect(self.db.db_path)
-        self.db.cursor = self.db.conn.cursor()
+        # The DatabaseManager from the caller's context should be active here.
         
         try:
             items_to_process = self.db.execute_query(select_query)

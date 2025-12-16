@@ -1,6 +1,8 @@
 # ==============================================================================
 # File: config_manager.py
-# Version: 0.1
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 2
+# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 # 1. Initial creation to manage dynamic settings loaded from a JSON file.

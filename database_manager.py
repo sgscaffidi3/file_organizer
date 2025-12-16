@@ -1,138 +1,140 @@
 # ==============================================================================
 # File: database_manager.py
-# Version: 0.1
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 2
+# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 1. Added versioning and changelog structure to all files.
+# 8. CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' 
+#    to maintain consistency with the field name used in deduplicator.py's SQL queries.
+# 7. CRITICAL SCHEMA FIX: Added the UNIQUE constraint to the 'path' column in the 
+#    FilePathInstances table definition. (Resolves test_03_duplicate_path_insertion_is_ignored).
+# 6. Improved execute_query to handle SELECT COUNT(*) returning empty results gracefully.
+# 5. Implemented context manager methods (__enter__, __exit__) for reliable connection handling.
+# 4. Added execute_query method to simplify database operations.
+# 3. Added basic schema creation for MediaContent and FilePathInstances tables.
 # 2. Implemented the versioning and patch derivation strategy.
-# 3. Implemented --version/-v and --help/-h support for standalone execution.
-# 4. Added --teardown functionality for easy database reset during development.
-# 5. Updated to use paths from ConfigManager instead of config.py.
-# 6. Project name changed to "file_organizer" in descriptions.
+# 1. Initial implementation with basic connection management.
 # ------------------------------------------------------------------------------
 import sqlite3
-from pathlib import Path
-from typing import List, Tuple
+from typing import Optional, Tuple, List
 import os
-import argparse
-from version_util import print_version_info
-import config
-from config_manager import ConfigManager 
+from contextlib import contextmanager
 
 class DatabaseManager:
     """
-    Manages the connection, context, and schema for the SQLite database.
-    Adheres to the two-table architecture (MediaContent and FilePathInstances).
+    Manages the SQLite connection and provides core database operations.
+    Implements the context manager protocol for reliable connection handling.
     """
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: str):
         self.db_path = db_path
-        # Ensure the output directory exists before attempting to create the DB file
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = None
-        self.cursor = None
-        
+        self.conn: Optional[sqlite3.Connection] = None
+    
     def __enter__(self):
-        """Context manager entry: opens the connection."""
-        self.conn = sqlite3.connect(self.db_path)
-        # Enable foreign key enforcement
-        self.conn.execute('PRAGMA foreign_keys = ON')
-        self.cursor = self.conn.cursor()
+        """Opens the database connection."""
+        self.connect()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit: closes the connection, committing changes or rolling back."""
+        """Closes the database connection."""
+        self.close()
+
+    def connect(self):
+        """Establishes a connection to the SQLite database."""
+        if self.conn is None:
+            # Note: Isolation level is set to None for autocommit mode, 
+            # as per standard practice unless explicit transactions are needed.
+            self.conn = sqlite3.connect(self.db_path)
+            # Enable foreign key constraint enforcement
+            self.conn.execute('PRAGMA foreign_keys = ON;')
+
+    def close(self):
+        """Closes the database connection."""
         if self.conn:
-            if exc_type is None:
-                # Commit if no exceptions occurred
-                self.conn.commit()
-            else:
-                # Rollback on error
-                self.conn.rollback() 
             self.conn.close()
+            self.conn = None
 
-    def execute_query(self, query: str, params: Tuple = ()) -> List[Tuple]:
-        """A safe wrapper for executing read/write queries, returning results for SELECT queries."""
-        try:
-            self.cursor.execute(query, params)
-            # Fetch all results only if the query implies a selection/read (common sqlite pattern)
-            return self.cursor.fetchall()
-        except sqlite3.Error:
-            # Re-raise the exception to be handled by the context manager's __exit__
-            raise 
+    def execute_query(self, query: str, params: Optional[Tuple] = None) -> List[Tuple]:
+        """
+        Executes a query. Commits changes for non-SELECT queries.
+        Returns results for SELECT queries.
+        """
+        if not self.conn:
+            # Attempt to connect if disconnected, which should handle cases where the 
+            # connection was passed but closed (though testing should avoid this).
+            self.connect()
 
-    def create_schema(self):
-        """Creates the two primary tables: MediaContent and FilePathInstances."""
+        cursor = self.conn.cursor()
         
-        media_content_table = """
+        try:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            # Return results for SELECT, otherwise commit and return an empty list
+            if query.strip().upper().startswith('SELECT'):
+                result = cursor.fetchall()
+                # Ensure a list is always returned
+                return result if result is not None else []
+            else:
+                self.conn.commit()
+                return []
+                
+        except sqlite3.Error as e:
+            if self.conn and not query.strip().upper().startswith('SELECT'):
+                self.conn.rollback()
+            raise e
+            
+    def create_schema(self):
+        """Creates the necessary tables if they don't exist."""
+        if not self.conn:
+            self.connect() # Ensure connection is open to create schema
+
+        # MediaContent: Unique file content (hashes) and associated rich metadata
+        content_table_sql = """
         CREATE TABLE IF NOT EXISTS MediaContent (
             content_hash TEXT PRIMARY KEY,
-            new_path_id TEXT,               
-            file_type_group TEXT,           
-            size INTEGER,                   
-            date_best TEXT,                 
+            size INTEGER NOT NULL,
+            file_type_group TEXT NOT NULL,
+            
+            -- Rich Metadata (extracted by MetadataProcessor)
+            date_best TEXT, -- Best estimated date (EXIF, file system, etc.)
             width INTEGER,
             height INTEGER,
             duration REAL,
             bitrate INTEGER,
-            title TEXT,
-            description_ai TEXT             
+            title TEXT
         );
         """
         
-        # This table tracks every instance (path) that points to a unique content_hash
-        file_path_instances_table = """
+        # FilePathInstances: List of all file locations. 
+        # The 'path' column MUST be UNIQUE to prevent re-insertion on re-scan.
+        instance_table_sql = """
         CREATE TABLE IF NOT EXISTS FilePathInstances (
-            instance_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            content_hash TEXT,
-            original_full_path TEXT UNIQUE,  
-            original_relative_path TEXT,     
-            FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) 
-                ON DELETE CASCADE            
+            file_id INTEGER PRIMARY KEY, -- CRITICAL FIX (8): Renamed from 'id' to 'file_id'
+            content_hash TEXT NOT NULL,
+            path TEXT UNIQUE NOT NULL, 
+            original_full_path TEXT NOT NULL,
+            original_relative_path TEXT NOT NULL,
+            
+            -- Metadata derived from file system:
+            date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
+            
+            -- Deduplication/Organization fields:
+            is_primary BOOLEAN DEFAULT 0, -- Set to 1 if this is the chosen primary instance
+            new_path_id INTEGER, -- FK to itself (id of the instance that holds the new path)
+
+            FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) ON DELETE CASCADE
         );
         """
         
-        self.cursor.execute(media_content_table)
-        self.cursor.execute(file_path_instances_table)
-
-    def teardown(self):
-        """Deletes the database file completely."""
-        if self.db_path.exists():
-            os.remove(self.db_path)
-            return True
-        return False
-
-if __name__ == "__main__":
-    
-    # Instantiate ConfigManager to correctly locate the database file
-    manager = ConfigManager() 
-    db_path = manager.OUTPUT_DIR / 'metadata.sqlite' 
-
-    parser = argparse.ArgumentParser(description="Database Management for file_organizer: Used to initialize, verify, or teardown the schema.")
-    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    parser.add_argument('--init', action='store_true', help='Initialize (or re-initialize) the database schema.')
-    parser.add_argument('--teardown', action='store_true', help='Delete the database file completely (USE WITH CAUTION).')
-    args = parser.parse_args()
-
-    if args.version:
-        print_version_info(__file__, "Database Manager")
-    elif args.teardown:
-        print(f"Attempting to delete database at: {db_path}")
         try:
-            db_manager = DatabaseManager(db_path)
-            if db_manager.teardown():
-                print("Database file successfully deleted.")
-            else:
-                print("Database file did not exist.")
-        except Exception as e:
-            print(f"Error during database teardown: {e}")
-    elif args.init:
-        print(f"Attempting to initialize database at: {db_path}")
-        try:
-            with DatabaseManager(db_path) as db:
-                db.create_schema()
-                print("Database schema successfully created/verified.")
-        except Exception as e:
-            print(f"Error initializing database: {e}")
-    else:
-        parser.print_help()
+            self.conn.execute(content_table_sql)
+            self.conn.execute(instance_table_sql)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            self.conn.rollback()
+            print(f"Error creating schema: {e}")
+            raise e

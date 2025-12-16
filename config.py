@@ -1,6 +1,8 @@
 # ==============================================================================
 # File: config.py
-# Version: 0.1
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 2
+# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 # 1. Added versioning and changelog structure to all files.
