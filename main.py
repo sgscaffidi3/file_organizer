@@ -1,13 +1,17 @@
 # ==============================================================================
 # File: main.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
+_MINOR_VERSION = 3
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 3. Added graceful version check and orchestrator logic structure.
-# 2. Integrated all pipeline components (scanner, processor, deduplicator, migrator).
-# 1. Initial implementation.
+_CHANGELOG_ENTRIES = [
+    "Initial implementation.",
+    "Integrated all pipeline components (scanner, processor, deduplicator, migrator).",
+    "Added graceful version check and orchestrator logic structure.",
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+]
 # ------------------------------------------------------------------------------
 import sys
 import argparse

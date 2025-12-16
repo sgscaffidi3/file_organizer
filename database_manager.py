@@ -1,20 +1,22 @@
 # ==============================================================================
 # File: database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
+_MINOR_VERSION = 3
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 8. CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' 
-#    to maintain consistency with the field name used in deduplicator.py's SQL queries.
-# 7. CRITICAL SCHEMA FIX: Added the UNIQUE constraint to the 'path' column in the 
-#    FilePathInstances table definition. (Resolves test_03_duplicate_path_insertion_is_ignored).
-# 6. Improved execute_query to handle SELECT COUNT(*) returning empty results gracefully.
-# 5. Implemented context manager methods (__enter__, __exit__) for reliable connection handling.
-# 4. Added execute_query method to simplify database operations.
-# 3. Added basic schema creation for MediaContent and FilePathInstances tables.
-# 2. Implemented the versioning and patch derivation strategy.
-# 1. Initial implementation with basic connection management.
+_CHANGELOG_ENTRIES = [
+    "Initial implementation with basic connection management.",
+    "Implemented the versioning and patch derivation strategy.",
+    "Added basic schema creation for MediaContent and FilePathInstances tables.",
+    "Added execute_query method to simplify database operations.",
+    "Implemented context manager methods (__enter__, __exit__) for reliable connection handling.",
+    "Improved execute_query to handle SELECT COUNT(*) returning empty results gracefully.",
+    "CRITICAL SCHEMA FIX: Added the UNIQUE constraint to the 'path' column in the FilePathInstances table definition. (Resolves test_03_duplicate_path_insertion_is_ignored).",
+    "CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' to maintain consistency with the field name used in deduplicator.py's SQL queries.",
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+]
 # ------------------------------------------------------------------------------
 import sqlite3
 from typing import Optional, Tuple, List
@@ -138,3 +140,17 @@ class DatabaseManager:
             self.conn.rollback()
             print(f"Error creating schema: {e}")
             raise e
+
+# --- CLI EXECUTION LOGIC ---
+if __name__ == '__main__':
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="Database Manager Utility")
+    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    args = parser.parse_args()
+
+    if args.version:
+        from version_util import print_version_info
+        print_version_info(__file__, "Database Manager")
+        sys.exit(0)

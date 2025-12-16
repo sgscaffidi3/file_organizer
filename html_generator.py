@@ -1,11 +1,15 @@
 # ==============================================================================
 # File: html_generator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
+_MINOR_VERSION = 3
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 1. Initial implementation of HTMLGenerator class for static output visualization (F09).
+_CHANGELOG_ENTRIES = [
+    "Initial implementation of HTMLGenerator class for static output visualization (F09).",
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+]
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple

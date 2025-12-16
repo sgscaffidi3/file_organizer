@@ -1,16 +1,20 @@
 # ==============================================================================
 # File: test_database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
+_MINOR_VERSION = 3
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 6. CRITICAL FIX: Corrected tearDown method to access db_path using the class name (TestDatabaseManager.db_path) instead of self.db_path, resolving AttributeError errors.
-# 5. Added tearDown method to ensure the DB file is removed after every test method for strict isolation.
-# 4. Corrected test path definitions to use pathlib correctly relative to the project root.
-# 3. Implemented a test for FOREIGN KEY constraint enforcement (test_03).
-# 2. Updated to use DatabaseManager's context manager functionality.
-# 1. Initial implementation.
+_CHANGELOG_ENTRIES = [
+    "Initial implementation.",
+    "Updated to use DatabaseManager's context manager functionality.",
+    "Implemented a test for FOREIGN KEY constraint enforcement (test_03).",
+    "Corrected test path definitions to use pathlib correctly relative to the project root.",
+    "Added tearDown method to ensure the DB file is removed after every test method for strict isolation.",
+    "CRITICAL FIX: Corrected tearDown method to access db_path using the class name (TestDatabaseManager.db_path) instead of self.db_path, resolving AttributeError errors.",
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+]
 # ------------------------------------------------------------------------------
 import unittest
 from pathlib import Path
@@ -20,6 +24,8 @@ import sqlite3
 import argparse
 import sys
 # Runtime imports
+# PATH SETUP
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 from database_manager import DatabaseManager
 from version_util import print_version_info
 
@@ -29,73 +35,79 @@ TEST_DB_FILENAME = 'test_db.sqlite'
 TEST_DB_PATH = TEST_OUTPUT_DIR / TEST_DB_FILENAME
 
 class TestDatabaseManager(unittest.TestCase):
-    
+    db_path: Path = TEST_DB_PATH
+
     @classmethod
     def setUpClass(cls):
-        """Sets up the test environment, cleaning up old outputs."""
-        # Set path as a class attribute for access in teardown methods
-        cls.db_path = TEST_DB_PATH
-        
-        if TEST_OUTPUT_DIR.exists():
-            shutil.rmtree(TEST_OUTPUT_DIR)
-        TEST_OUTPUT_DIR.mkdir()
+        """Setup before any tests run."""
+        # Ensure the test directory exists
+        cls.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    @classmethod
-    def tearDownClass(cls):
-        """Cleans up the test output directory."""
-        if TEST_OUTPUT_DIR.exists():
-            shutil.rmtree(TEST_OUTPUT_DIR)
+    def setUp(self):
+        """Setup before each test: initialize the database."""
+        if self.db_path.exists():
+            os.remove(self.db_path)
+            
+        # Initialize with the schema
+        with DatabaseManager(self.db_path) as db:
+            db.create_schema()
 
     def tearDown(self):
-        """CRITICAL FIX: Ensures the DB file is removed after every test method for isolation."""
-        # Must access the class attribute via the Class name, not 'self', 
-        # unless 'self' was initialized with it.
-        if os.path.exists(TestDatabaseManager.db_path):
+        """Cleanup after each test: delete the database file."""
+        if TestDatabaseManager.db_path.exists():
             os.remove(TestDatabaseManager.db_path)
 
-    def test_01_db_file_creation_and_context_manager(self):
-        """Test that the DB file is created and the context manager works."""
-        self.assertFalse(TestDatabaseManager.db_path.exists())
+    def test_01_connection_and_schema_creation(self):
+        """Test that the DB file is created and schema exists."""
+        # Setup in setUp() handles file creation and schema creation
+        self.assertTrue(self.db_path.exists(), "Database file was not created.")
         
-        with DatabaseManager(TestDatabaseManager.db_path) as db:
-            pass
-        
-        self.assertTrue(TestDatabaseManager.db_path.exists())
-
-    def test_02_schema_creation_and_table_existence(self):
-        """Test that both required tables are created."""
-        with DatabaseManager(TestDatabaseManager.db_path) as db:
-            db.create_schema()
-
-            cursor = db.conn.cursor()
-            
+        with DatabaseManager(self.db_path) as db:
             # Check for MediaContent table
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='MediaContent';")
-            self.assertIsNotNone(cursor.fetchone(), "MediaContent table was not created.")
-
+            table_check = db.execute_query("SELECT name FROM sqlite_master WHERE type='table' AND name='MediaContent';")
+            self.assertEqual(len(table_check), 1, "MediaContent table not found.")
             # Check for FilePathInstances table
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='FilePathInstances';")
-            self.assertIsNotNone(cursor.fetchone(), "FilePathInstances table was not created.")
+            table_check = db.execute_query("SELECT name FROM sqlite_master WHERE type='table' AND name='FilePathInstances';")
+            self.assertEqual(len(table_check), 1, "FilePathInstances table not found.")
 
-    def test_03_foreign_key_constraint(self):
-        """Test the FOREIGN KEY constraint between instances and content."""
-        content_hash = "a" * 64
-        instance_path = "/test/path/file.txt"
-
-        with DatabaseManager(TestDatabaseManager.db_path) as db:
-            db.create_schema()
+    def test_02_execute_query_insert_and_select(self):
+        """Test basic INSERT and SELECT functionality."""
+        content_hash = "TEST_HASH_12345"
+        instance_path = "/a/b/c.jpg"
+        
+        with DatabaseManager(self.db_path) as db:
+            # 1. Insert into MediaContent (parent record)
+            insert_content_query = "INSERT INTO MediaContent (content_hash, size, file_type_group) VALUES (?, ?, ?);"
+            db.execute_query(insert_content_query, (content_hash, 100, 'IMAGE'))
             
-            # Attempt to insert into instances without corresponding content (should fail)
+            # 2. Insert into FilePathInstances (child record)
+            insert_instance_query = """
+            INSERT INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path) 
+            VALUES (?, ?, ?, ?);
+            """
+            db.execute_query(insert_instance_query, (content_hash, instance_path, instance_path, 'relative/c.jpg'))
+
+            # 3. Select and verify
+            select_query = "SELECT COUNT(*) FROM FilePathInstances WHERE content_hash = ?;"
+            count = db.execute_query(select_query, (content_hash,))[0][0]
+            self.assertEqual(count, 1, "Record count incorrect after insertion.")
+            
+    def test_03_foreign_key_constraint(self):
+        """Test that insertion into FilePathInstances fails without MediaContent parent."""
+        content_hash = "NON_EXISTENT_HASH"
+        instance_path = "/d/e/f.mp4"
+        
+        with DatabaseManager(self.db_path) as db:
             insert_instance_query = """
             INSERT INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path) 
             VALUES (?, ?, ?, ?);
             """
             
+            # Attempt to insert without parent content record
             with self.assertRaises(sqlite3.IntegrityError):
-                db.execute_query(insert_instance_query, (content_hash, instance_path, instance_path, 'relative/path'))
-                db.conn.commit() # The error usually triggers on commit/query
+                db.execute_query(insert_instance_query, (content_hash, instance_path, instance_path, 'relative/f.mp4'))
 
-            # Insert into MediaContent (parent record)
+            # Manually insert into MediaContent (parent record)
             insert_content_query = """
             INSERT INTO MediaContent (content_hash, size, file_type_group) 
             VALUES (?, ?, ?);
@@ -103,7 +115,7 @@ class TestDatabaseManager(unittest.TestCase):
             db.execute_query(insert_content_query, (content_hash, 100, 'OTHER'))
             
             # Now, insertion into FilePathInstances should succeed
-            db.execute_query(insert_instance_query, (content_hash, instance_path, instance_path, 'relative/path'))
+            db.execute_query(insert_instance_query, (content_hash, instance_path, instance_path, 'relative/f.mp4'))
             # If no exception is raised, it passes
 
     def test_04_teardown_functionality(self):
@@ -120,10 +132,7 @@ class TestDatabaseManager(unittest.TestCase):
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
-    # 1. PATH SETUP
-    sys.path.append(str(Path(__file__).resolve().parent.parent))
-    
-    # 2. ARGUMENT PARSING
+    #  ARGUMENT PARSING
     parser = argparse.ArgumentParser(description="Unit tests for DatabaseManager.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
     args = parser.parse_args()
@@ -132,6 +141,5 @@ if __name__ == '__main__':
     if args.version:
         print_version_info(__file__, "DatabaseManager Unit Tests")
         sys.exit(0)
-
-    # 4. RUN TESTS
+        
     unittest.main()

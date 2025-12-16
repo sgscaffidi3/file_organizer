@@ -1,12 +1,16 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
+_MINOR_VERSION = 3
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 2. CRITICAL FIX: Removed manual database connection close/reopen logic, relying on the caller's DatabaseManager context.
-# 1. Initial implementation of MetadataProcessor class and its update logic (F04).
+_CHANGELOG_ENTRIES = [
+    "Initial implementation of MetadataProcessor class and its update logic (F04).",
+    "CRITICAL FIX: Removed manual database connection close/reopen logic, relying on the caller's DatabaseManager context.",
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+]
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List, Optional

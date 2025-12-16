@@ -1,17 +1,22 @@
 # ==============================================================================
 # File: config_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
+_MINOR_VERSION = 3
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 1. Initial creation to manage dynamic settings loaded from a JSON file.
-# 2. Project name changed to "file_organizer" in descriptions.
+_CHANGELOG_ENTRIES = [
+    "Initial creation to manage dynamic settings loaded from a JSON file.",
+    "Project name changed to \"file_organizer\" in descriptions.",
+    "Added CLI argument parsing for --version to allow clean exit during health checks.",
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning."
+]
 # ------------------------------------------------------------------------------
 import json
 from pathlib import Path
 from typing import Dict, Any, List
 import argparse
+import sys
 from version_util import print_version_info
 
 class ConfigManager:
@@ -76,6 +81,7 @@ if __name__ == "__main__":
 
     if args.version:
         print_version_info(__file__, "Configuration Manager")
+        sys.exit(0)
     else:
         # Example usage of the ConfigManager when run independently
         manager = ConfigManager()

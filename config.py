@@ -1,18 +1,23 @@
 # ==============================================================================
 # File: config.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-# Version: <Automatically calculated via _MAJOR_VERSION._MINOR_VERSION.PATCH>
+_MINOR_VERSION = 3
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 1. Added versioning and changelog structure to all files.
-# 2. Implemented the versioning and patch derivation strategy.
-# 3. Implemented --version/-v and --help/-h support for standalone execution.
-# 4. Refactored to remove dynamic settings (paths, file groups), which are now managed by ConfigManager.
-# 5. Project name changed to "file_organizer" in descriptions.
+_CHANGELOG_ENTRIES = [
+    "Added versioning and changelog structure to all files.",
+    "Implemented the versioning and patch derivation strategy.",
+    "Implemented --version/-v and --help/-h support for standalone execution.",
+    "Refactored to remove dynamic settings (paths, file groups), which are now managed by ConfigManager.",
+    "Project name changed to \"file_organizer\" in descriptions.",
+    "Added CLI argument parsing for --version to allow clean exit during health checks.",
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning."
+]
 # ------------------------------------------------------------------------------
 from pathlib import Path
 import argparse
+import sys
 from version_util import print_version_info
 from config_manager import ConfigManager 
 
@@ -34,5 +39,6 @@ if __name__ == "__main__":
 
     if args.version:
         print_version_info(__file__, "Static Configuration and Global Settings")
+        sys.exit(0)
     else:
         parser.print_help()
