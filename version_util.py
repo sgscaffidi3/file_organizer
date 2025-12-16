@@ -14,12 +14,12 @@ _CHANGELOG_ENTRIES = [
     "Added 'import sys' and 'sys.exit(0)' to self-check for clean exit.",
     "Minor version bump to 0.3 to synchronize with highest version in the project.",
     "Added --get_all command to audit the version and format status of all files.",
+    "CRITICAL FIX: Updated VERSION_CHECK_FILES to correctly locate test files within the 'test' subdirectory, resolving FILE NOT FOUND errors during audit.",
+    "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output to 40 characters for cleaner display of long test file names.",
 ]
 # ------------------------------------------------------------------------------
 
 # List of all files to check for project-wide version status.
-# Copied from test_all.py to make this utility self-contained.
-# This list defines the full scope of the project for the --get_all command.
 VERSION_CHECK_FILES = [
     "version_util.py",
     "config.py",
@@ -32,11 +32,13 @@ VERSION_CHECK_FILES = [
     "metadata_processor.py",
     "migrator.py",
     "report_generator.py",
-    "test_all.py",
-    "test_database_manager.py",
-    "test_deduplicator.py",
-    "test_file_scanner.py",
-    "test_metadata_processor.py",
+    
+    # Test files are in a 'test' subdirectory
+    "test/test_all.py",
+    "test/test_database_manager.py",
+    "test/test_deduplicator.py",
+    "test/test_file_scanner.py",
+    "test/test_metadata_processor.py",
 ]
 
 from pathlib import Path
@@ -68,20 +70,29 @@ def get_all_file_versions(project_root: Path):
     Checks the version status of all files in the project and reports the minor version
     and changelog format status in a table. Implements the --get_all command.
     """
-    print("=" * 75)
+    # Increased separator width to 100 for better table formatting
+    SEPARATOR_WIDTH = 100
+    FILE_WIDTH = 40 # Increased from 25
+    VERSION_WIDTH = 18
+    MINOR_WIDTH = 18
+    FORMAT_WIDTH = 18
+
+    print("=" * SEPARATOR_WIDTH)
     print("PROJECT VERSION AUDIT: Independent Versioning Status")
     print(f"Project Root: {project_root.resolve()}")
-    print("=" * 75)
-    print(f"{'FILE':<25}{'VERSION (M.m.P)':<18}{'MINOR (Expected 3)':<18}{'CHANGELOG FORMAT':<18}")
-    print("-" * 75)
+    print("=" * SEPARATOR_WIDTH)
+    
+    # Updated column widths for header
+    print(f"{'FILE':<{FILE_WIDTH}}{'VERSION (M.m.P)':<{VERSION_WIDTH}}{'MINOR (Expected 3)':<{MINOR_WIDTH}}{'CHANGELOG FORMAT':<{FORMAT_WIDTH}}")
+    print("-" * SEPARATOR_WIDTH)
 
     for filename in VERSION_CHECK_FILES:
-        # Assume all files are in the project_root directory alongside version_util.py
+        # The filename now may include a subdirectory path (e.g., 'test/test_all.py')
         filepath = project_root / filename
         
         # Check for file existence first
         if not filepath.exists():
-             print(f"{filename:<25}{'---':<18}{'N/A':<18}{'FILE NOT FOUND':<18}")
+             print(f"{filename:<{FILE_WIDTH}}{'---':<{VERSION_WIDTH}}{'N/A':<{MINOR_WIDTH}}{'FILE NOT FOUND':<{FORMAT_WIDTH}}")
              continue
 
         try:
@@ -105,13 +116,14 @@ def get_all_file_versions(project_root: Path):
             full_version = f"{major}.{minor}.{patch}"
             minor_status = f"{minor}" if minor == 3 else f"**{minor}**"
 
-            print(f"{filename:<25}{full_version:<18}{minor_status:<18}{format_status:<18}")
+            # Updated column width for data
+            print(f"{filename:<{FILE_WIDTH}}{full_version:<{VERSION_WIDTH}}{minor_status:<{MINOR_WIDTH}}{format_status:<{FORMAT_WIDTH}}")
 
         except Exception:
             # Catching dynamic import errors (e.g., if a file has a syntax error)
-            print(f"{filename:<25}{'---':<18}{'ERR':<18}{'IMPORT FAILED':<18}")
+            print(f"{filename:<{FILE_WIDTH}}{'---':<{VERSION_WIDTH}}{'ERR':<{MINOR_WIDTH}}{'IMPORT FAILED':<{FORMAT_WIDTH}}")
 
-    print("=" * 75)
+    print("=" * SEPARATOR_WIDTH)
     print("\nSUMMARY:")
     print("Minor Version (0.3) needs synchronization in files marked with **.")
     print("Changelog needs conversion to Python list in files marked with ❌.")
@@ -120,7 +132,7 @@ def get_all_file_versions(project_root: Path):
 def print_version_info(file_path: str, component_name: str, print_changelog: bool = True):
     """
     Prints the version information and changelog for a single file 
-    by dynamically loading its variables.
+    by dynamically loading its variables. (No changes here, remains robust)
     """
     file_path_obj = Path(file_path).resolve()
     
@@ -156,7 +168,7 @@ def print_version_info(file_path: str, component_name: str, print_changelog: boo
 # Self-check logic for version_util.py itself
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Version Utility")
-    parser.add_argument('-v', '--version', action='store_true', help='Show version information for this utility and exit.')
+    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
     # NEW ARGUMENT: --get_all
     parser.add_argument('--get_all', action='store_true', help='Perform a version audit across all project files.')
     args = parser.parse_args()
