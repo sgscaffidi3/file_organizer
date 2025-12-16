@@ -9,7 +9,8 @@ _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class and its update logic (F04).",
     "CRITICAL FIX: Removed manual database connection close/reopen logic, relying on the caller's DatabaseManager context.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
+    "CRITICAL LOGIC FIX: Removed redundant WHERE clause from the MediaContent UPDATE statement. The update should apply regardless of the current `width` value, resolving `test_03_processor_skips_already_processed_records`."
 ]
 # ------------------------------------------------------------------------------
 from pathlib import Path
@@ -96,20 +97,16 @@ class MetadataProcessor:
         query = "SELECT original_full_path FROM FilePathInstances WHERE content_hash = ? LIMIT 1;"
         result = self.db.execute_query(query, (content_hash,))
         
-        if result and result[0]:
+        # The result of execute_query is List[Tuple] or int (for non-selects).
+        # Since this is a SELECT, it is List[Tuple].
+        if result and result[0]: 
             return Path(result[0][0])
         return None
 
     def _update_media_content(self, content_hash: str, metadata: Dict[str, Any]):
         """Updates the MediaContent row with the extracted data."""
-
-        # Combine size, group, and the best date from the original scan (date_best)
-        # with the newly extracted metadata, preferring the extracted date.
         
-        # NOTE: In a real implementation, 'date_extracted' would be rigorously 
-        # compared against 'date_best' (which is currently just file mtime) 
-        # to select the true chronological date. For the stub, we just use the extracted date.
-        
+        # CRITICAL FIX: Removed the redundant `WHERE` clause that was preventing updates.
         update_query = """
         UPDATE MediaContent SET
             date_best = ?,
@@ -118,7 +115,7 @@ class MetadataProcessor:
             duration = ?,
             bitrate = ?,
             title = ?
-        WHERE content_hash = ? AND (width IS NULL OR width = 0); 
+        WHERE content_hash = ?;
         """
         
         params = (
@@ -131,7 +128,7 @@ class MetadataProcessor:
             content_hash
         )
         
-        # We assume the content_hash already exists due to the FileScanner run
+        # We ignore the rowcount returned here
         self.db.execute_query(update_query, params)
         self.processed_count += 1
 
@@ -142,9 +139,8 @@ class MetadataProcessor:
         # Query for all unique files (content_hash) that are missing metadata (width is NULL or 0)
         select_query = "SELECT content_hash, file_type_group FROM MediaContent WHERE width IS NULL OR width = 0;"
         
-        # The DatabaseManager from the caller's context should be active here.
-        
         try:
+            # The result is List[Tuple]
             items_to_process = self.db.execute_query(select_query)
         except sqlite3.OperationalError as e:
             print(f"Error querying database (Schema missing?): {e}")
@@ -172,8 +168,7 @@ class MetadataProcessor:
             else:
                 self.skip_count += 1
                 
-        # Commit all updates after the loop finishes
-        self.db.conn.commit()
+        # The commit happens inside DatabaseManager.execute_query for each update.
         print(f"Metadata processing complete. Updated {self.processed_count} records, skipped {self.skip_count} records.")
 
 if __name__ == "__main__":
