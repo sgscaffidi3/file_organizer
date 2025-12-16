@@ -19,7 +19,9 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL FIX: Final verification and correction of the FilePathInstances INSERT OR IGNORE statement to explicitly list content_hash, path, original_full_path, and original_relative_path. This definitively resolves the test_03_duplicate_path_insertion_is_ignored failure (AssertionError: 6 != 3).",
     "CRITICAL LOGIC FIX: Final verification and correction of the FilePathInstances INSERT OR IGNORE statement to explicitly list content_hash, path, original_full_path, and original_relative_path. This definitively resolves the test_03_duplicate_path_insertion_is_ignored failure (AssertionError: 6 != 3).",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
+    "CRITICAL LOGIC FIX: Updated `_calculate_hash_and_metadata` to format file modification time (`st_mtime`) into a proper SQLite datetime string. This resolves MediaContent insertion failures (`IndexError: list index out of range`).",
+    "CRITICAL LOGIC FIX: Updated `_insert_to_db` to include the new `date_modified` column in `FilePathInstances` and to use the `rowcount` from the DB to correctly track inserted file paths (Resolves `test_03_duplicate_path_insertion_is_ignored`)."
 ]
 # ------------------------------------------------------------------------------
 import hashlib
@@ -28,6 +30,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 import sqlite3
 import argparse
+import datetime # NEW IMPORT
 
 import config
 from database_manager import DatabaseManager
@@ -46,7 +49,7 @@ class FileScanner:
         self.file_groups = file_groups 
         self.block_size = config.BLOCK_SIZE
         self.files_scanned_count = 0
-        # NOTE: files_inserted_count tracks unique file records (MediaContent/FilePathInstances)
+        # NOTE: files_inserted_count tracks *new* unique file path records (FilePathInstances)
         self.files_inserted_count = 0 
 
     def _get_file_group(self, file_path: Path) -> str:
@@ -69,12 +72,15 @@ class FileScanner:
 
             stat = file_path.stat()
             
+            # CRITICAL FIX: Convert st_mtime (timestamp float) to a SQLite-friendly datetime string
+            datetime_str = datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+
             metadata = {
                 'content_hash': hasher.hexdigest(),
                 'size': stat.st_size,
                 'file_type_group': self._get_file_group(file_path),
                 # Using file system modification time (st_mtime) as a temporary date_best placeholder
-                'date_best': str(stat.st_mtime), 
+                'date_best': datetime_str, # Use formatted string
                 'original_full_path': str(file_path),
                 # Path relative to the source directory root
                 'original_relative_path': str(file_path.relative_to(self.source_dir))
@@ -100,27 +106,31 @@ class FileScanner:
         (content_hash, size, file_type_group, date_best) 
         VALUES (?, ?, ?, ?);
         """
+        # The return value here is ignored, as MediaContent insertion is not counted.
         self.db.execute_query(media_insert_query, (
             metadata['content_hash'], 
             metadata['size'], 
             metadata['file_type_group'],
-            metadata['date_best']
+            metadata['date_best'] # Formatted datetime string
         ))
 
-        # DEFINITIVE CODE CHANGE: Explicitly list all four columns to guarantee UNIQUE constraint on 'path' is enforced.
+        # Insert or IGNORE FilePathInstances. Note the addition of date_modified.
         instance_insert_query = """
         INSERT OR IGNORE INTO FilePathInstances 
-        (content_hash, path, original_full_path, original_relative_path) 
-        VALUES (?, ?, ?, ?);
+        (content_hash, path, original_full_path, original_relative_path, date_modified) 
+        VALUES (?, ?, ?, ?, ?);
         """
-        self.db.execute_query(instance_insert_query, (
+        # CRITICAL FIX: Use rowcount to track actual insertions
+        rows_inserted = self.db.execute_query(instance_insert_query, (
             metadata['content_hash'],
             metadata['original_full_path'], # value for 'path' column
             metadata['original_full_path'],
-            metadata['original_relative_path']
+            metadata['original_relative_path'],
+            metadata['date_best'] # Using date_best for date_modified
         ))
         
-        self.files_inserted_count += 1
+        # Only increment if a row was actually inserted (rowcount will be 1 for successful INSERT, 0 for IGNORE)
+        self.files_inserted_count += rows_inserted
         
     def scan_and_insert(self):
         """Main method to traverse the source directory and populate the database."""
@@ -157,6 +167,8 @@ class FileScanner:
                         else:
                              print(f"Database insertion failed for {full_path}: {e}")
                 
+        # The database commit now happens inside execute_query, but we keep this final
+        # print statement for audit purposes.
         print(f"\nScan complete. Total files scanned: {self.files_scanned_count}, unique instances recorded: {self.files_inserted_count}")
 
 if __name__ == "__main__":
