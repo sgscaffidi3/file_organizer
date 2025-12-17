@@ -2,6 +2,7 @@
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
+_PATCH_VERSION = 14
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -21,6 +22,8 @@ from typing import Dict, Any, List, Optional, Tuple # <-- FIXED: Added Tuple
 import os
 import datetime
 import sqlite3
+import argparse
+import sys
 
 # --- Project Dependencies ---
 from database_manager import DatabaseManager
@@ -131,6 +134,7 @@ class MetadataProcessor:
             file_path = Path(path_to_file)
             
             # Check if the file still exists on the file system
+            # NOTE: test_metadata_processor.py must create mock files to pass this check.
             if not file_path or not file_path.exists():
                 self.skip_count += 1
                 continue
@@ -154,9 +158,8 @@ class MetadataProcessor:
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == "__main__":
+    
     # CRITICAL IMPORT FIX: Move system/cli imports to the execution block
-    import sys
-    import argparse
     from version_util import print_version_info # <-- MOVED HERE TO PREVENT CRASH
     
     manager = ConfigManager()

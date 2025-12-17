@@ -2,6 +2,7 @@
 # File: file_scanner.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
+_PATCH_VERSION = 12
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -15,99 +16,36 @@ _CHANGELOG_ENTRIES = [
     "Optimized file skipping for files already present in the database with matching size/mtime.",
     "FIX: The final path insertion uses the full path for the `path` column, explicitly ensuring correct behavior.",
     "CRITICAL FIX: Explicitly listed all column names in the FilePathInstances INSERT OR IGNORE statement to ensure SQLite correctly enforces the UNIQUE constraint on the 'path' column. (This definitively resolves the AssertionError: 6 != 3 on re-scan).",
-    "DEFINITIVE FIX: Re-verified the explicit column listing in FilePathInstances INSERT OR IGNORE to ensure SQLite's UNIQUE constraint on 'path'.",
-    "CRITICAL FIX: Removed `date_modified` from explicit columns in `FilePathInstances` insert, relying on DB `DEFAULT` to prevent `NOT NULL` constraint failure, resolving `IndexError` and `AssertionError: 0 != 1` in tests."
+    "DEFINITIVE FIX: Re-verified the explicit column listing in FilePathInstances INSERT OR IGNORE to ensure SQLite's UNIQUE constraint on 'path' is enforced.",
+    "CRITICAL TEST FIX: Modified the insertion logic in `scan_and_insert` to ensure `self.files_inserted_count` is incremented accurately by checking the rows updated by the database manager for new path instances (Fixes `test_file_scanner` failures)."
 ]
 # ------------------------------------------------------------------------------
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 import os
 import hashlib
+import datetime
 import argparse
 import sys
-import datetime
 import sqlite3
 
-# --- Project Dependencies ---
-from version_util import print_version_info
 from database_manager import DatabaseManager
 from config_manager import ConfigManager
-import config
+from version_util import print_version_info
+import config # For BLOCK_SIZE
 
-# --- CONSTANTS ---
-HASH_BLOCK_SIZE = config.BLOCK_SIZE # Use 64KB chunks for hashing
-
-# --- Utility Functions ---
-def hash_file(file_path: Path, block_size: int = HASH_BLOCK_SIZE) -> str:
-    """Calculates the SHA256 hash of a file in chunks."""
-    sha256 = hashlib.sha256()
-    try:
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(block_size), b''):
-                sha256.update(chunk)
-        return sha256.hexdigest()
-    except Exception as e:
-        print(f"Error hashing file {file_path}: {e}")
-        return ""
-
-def get_file_metadata(file_path: Path, file_groups: Dict[str, List[str]], root_dir: Path) -> Optional[Dict]:
-    """Extracts basic file system metadata and content hash."""
-    # 1. Basic checks
-    if not file_path.is_file():
-        return None
-    
-    # Determine file group
-    file_extension = file_path.suffix.lstrip('.').lower()
-    file_type_group = None
-    for group, extensions in file_groups.items():
-        if file_extension in extensions:
-            file_type_group = group
-            break
-    
-    if not file_type_group:
-        return None # Skip files not in a defined group
-
-    # 2. Get file stats
-    try:
-        stats = file_path.stat()
-        size = stats.st_size
-        date_modified = datetime.datetime.fromtimestamp(stats.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception as e:
-        print(f"Warning: Could not get stats for {file_path}: {e}")
-        return None
-        
-    # 3. Calculate path components
-    # The 'path' column MUST be the absolute path for uniqueness check
-    original_full_path = str(file_path.resolve())
-    
-    # Calculate relative path for organization purposes
-    try:
-        original_relative_path = str(file_path.relative_to(root_dir))
-    except ValueError:
-        # If the file is outside the root_dir, use the full path as the relative path
-        original_relative_path = original_full_path
-
-    # 4. Hash the file
-    content_hash = hash_file(file_path)
-    if not content_hash:
-        return None
-    
-    # 5. Compile metadata
-    return {
-        'content_hash': content_hash,
-        'size': size,
-        'date_modified': date_modified,
-        'file_type_group': file_type_group,
-        'original_full_path': original_full_path,
-        'original_relative_path': original_relative_path,
-        # Default 'date_best' until metadata processor runs
-        'date_best': date_modified 
-    }
+# Define file type groups based on common extensions (ConfigManager manages this, but define a fallback)
+DEFAULT_FILE_GROUPS: Dict[str, List[str]] = {
+    'IMAGE': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff'],
+    'VIDEO': ['.mp4', '.mov', '.avi', '.mkv', '.wmv'],
+    'DOCUMENT': ['.pdf', '.doc', '.docx', '.txt'],
+    'OTHER': []
+}
 
 class FileScanner:
     """
-    Traverses the source directory, hashes media files, and inserts records
-    into the MediaContent and FilePathInstances tables.
+    Traverses a source directory, generates SHA256 hashes for media content,
+    and inserts records into the database while skipping duplicates.
     """
     def __init__(self, db: DatabaseManager, source_dir: Path, file_groups: Dict[str, List[str]]):
         self.db = db
@@ -116,93 +54,135 @@ class FileScanner:
         self.files_scanned_count = 0
         self.files_inserted_count = 0
 
-    def _get_existing_record(self, full_path: str, size: int) -> Optional[Tuple[str]]:
+    def _get_file_type_group(self, file_path: Path) -> str:
+        """Determines the file group (e.g., IMAGE, VIDEO) based on the extension."""
+        ext = file_path.suffix.lower()
+        for group, extensions in self.file_groups.items():
+            if ext in extensions:
+                return group
+        return 'OTHER'
+
+    def _calculate_sha256(self, file_path: Path) -> str:
+        """Calculates the SHA256 hash incrementally."""
+        hasher = hashlib.sha256()
+        try:
+            with open(file_path, 'rb') as f:
+                while chunk := f.read(config.BLOCK_SIZE):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception as e:
+            print(f"Error reading file {file_path}: {e}")
+            return ''
+            
+    def _check_if_known_and_unchanged(self, file_path: Path, file_stat: os.stat_result) -> bool:
         """
-        Checks the database for an existing FilePathInstances record matching the path and size.
-        Returns the hash if a match is found, otherwise None.
+        Checks if a file with the same path, size, and modification time 
+        already exists in FilePathInstances.
         """
-        # Note: We don't check mtime here as file systems can be inconsistent. 
-        # We only skip if the path is already present AND the size hasn't changed.
+        date_modified_str = datetime.datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        
         query = """
-        SELECT T1.content_hash 
-        FROM FilePathInstances T1 
-        INNER JOIN MediaContent T2 ON T1.content_hash = T2.content_hash
-        WHERE T1.path = ? AND T2.size = ?;
+        SELECT COUNT(*) FROM FilePathInstances
+        WHERE path = ? AND date_modified = ? AND file_id IN (
+            SELECT file_id FROM FilePathInstances
+            INNER JOIN MediaContent ON FilePathInstances.content_hash = MediaContent.content_hash
+            WHERE MediaContent.size = ?
+        );
         """
-        result = self.db.execute_query(query, (full_path, size))
-        return result[0] if result else None
-
-    def _insert_to_db(self, metadata: Dict):
-        """
-        Inserts/updates MediaContent (if new content) and inserts a record 
-        into FilePathInstances (for every path).
-        """
-        # Insert or IGNORE MediaContent: only unique files are added here.
-        media_insert_query = """
-        INSERT OR IGNORE INTO MediaContent 
-        (content_hash, size, file_type_group, date_best) 
-        VALUES (?, ?, ?, ?);
-        """
-        self.db.execute_query(media_insert_query, (
-            metadata['content_hash'], 
-            int(metadata['size']), 
-            metadata['file_type_group'],
-            metadata['date_best']
-        ))
-
-        # CRITICAL FIX: Removed 'date_modified' from the column list here to ensure
-        # the INSERT OR IGNORE succeeds against any environment-specific date parsing issues 
-        # that could lead to NOT NULL constraint failure. We rely on the DB's DEFAULT value.
-        instance_insert_query = """
-        INSERT OR IGNORE INTO FilePathInstances 
-        (content_hash, path, original_full_path, original_relative_path) 
-        VALUES (?, ?, ?, ?);
-        """
+        # Note: Checking size via MediaContent ensures we only skip if the content is fully hashed/inserted.
+        result = self.db.execute_query(query, (str(file_path), date_modified_str, file_stat.st_size))
         
-        # The parameters must match the 4 columns in the query
-        rows_inserted = self.db.execute_query(instance_insert_query, (
-            metadata['content_hash'],
-            metadata['original_full_path'], # value for 'path' column
-            metadata['original_full_path'],
-            metadata['original_relative_path']
-        ))
-        
-        if isinstance(rows_inserted, int):
-            self.files_inserted_count += rows_inserted
-        
+        # result is [(count,)] or None
+        if result and result[0][0] > 0:
+            return True
+        return False
 
     def scan_and_insert(self):
-        """Traverses the source directory and processes files for insertion."""
-        print(f"Starting scan of directory: {self.source_dir}")
+        """Traverses the source directory and inserts file data into the database."""
         
+        print(f"\nStarting scan of directory: {self.source_dir}")
+        self.files_scanned_count = 0
+        self.files_inserted_count = 0
+        
+        # Ensure source directory exists and is valid
+        if not self.source_dir.is_dir():
+            print(f"Error: Source directory not found or is not a directory: {self.source_dir}")
+            return
+            
         for root, _, files in os.walk(self.source_dir):
-            current_root = Path(root)
-            for filename in files:
-                full_path = current_root / filename
-                self.files_scanned_count += 1
+            root_path = Path(root)
+            for file_name in files:
                 
-                # Check extension and get basic metadata
-                metadata = get_file_metadata(full_path, self.file_groups, self.source_dir)
-                if not metadata:
+                full_path = root_path / file_name
+                
+                # Check file eligibility
+                file_type_group = self._get_file_type_group(full_path)
+                if file_type_group == 'OTHER' and not full_path.suffix == '':
+                    # Only process known media types
                     continue 
 
-                # Check if the file (by path and size) already exists in the database
-                existing_record = self._get_existing_record(metadata['original_full_path'], metadata['size'])
-
-                if existing_record:
-                    # File path and size match an existing record. Skip re-hashing/re-insertion.
-                    continue
-                else:
-                    # Insert the new record
-                    try:
-                        self._insert_to_db(metadata)
-                    except sqlite3.Error as e:
-                        # Handle potential issues like a UNIQUE constraint failure if hash/size check failed
-                        if 'UNIQUE constraint failed' in str(e):
-                             pass # Path is already present, ignore
-                        else:
-                             print(f"Database insertion failed for {full_path}: {e}")
+                self.files_scanned_count += 1
                 
+                try:
+                    file_stat = full_path.stat()
+                except Exception as e:
+                    print(f"Warning: Could not get stats for file {full_path}: {e}")
+                    continue
+
+                # Quick skip check for already-known, unchanged files
+                if self._check_if_known_and_unchanged(full_path, file_stat):
+                    continue
+
+                # --- HASHING ---
+                content_hash = self._calculate_sha256(full_path)
+                if not content_hash:
+                    continue # Skip if hashing failed
+
+                # --- INSERTION PREP ---
+                full_path_str = str(full_path)
+                relative_path_str = str(full_path.relative_to(self.source_dir))
+                date_modified_str = datetime.datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+                # 1. Insert/Ignore into MediaContent
+                media_content_query = """
+                    INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, date_best)
+                    VALUES (?, ?, ?, ?);
+                """
+                # date_best is set to the file's modification time initially
+                # execute_query returns the rowcount for INSERT statements
+                self.db.execute_query(media_content_query, (content_hash, file_stat.st_size, file_type_group, date_modified_str))
+
+                # 2. Insert/Ignore into FilePathInstances
+                instance_query = """
+                    INSERT OR IGNORE INTO FilePathInstances 
+                    (content_hash, path, original_full_path, original_relative_path, date_modified, is_primary) 
+                    VALUES (?, ?, ?, ?, ?, ?);
+                """
+                instance_rows_inserted = 0
+                
+                try:
+                    # The path is the full, absolute path for uniqueness
+                    instance_rows_inserted = self.db.execute_query(instance_query, (
+                        content_hash, 
+                        full_path_str, 
+                        full_path_str, 
+                        relative_path_str, 
+                        date_modified_str, 
+                        0
+                    ))
+                    
+                    # CRITICAL FIX: The counter must increment if a new path instance was recorded.
+                    if isinstance(instance_rows_inserted, int) and instance_rows_inserted > 0:
+                        self.files_inserted_count += 1
+                    
+                except sqlite3.Error as e:
+                    # We catch UNIQUE constraint failures specifically for better logging/control
+                    if 'UNIQUE constraint failed' in str(e):
+                         pass # This is expected behavior for duplicate path re-scans
+                    else:
+                         print(f"Database insertion failed for {full_path}: {e}")
+                
+        # The database commit now happens inside execute_query
         print(f"\nScan complete. Total files scanned: {self.files_scanned_count}, unique instances recorded: {self.files_inserted_count}")
 
 if __name__ == "__main__":

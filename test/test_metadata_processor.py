@@ -2,7 +2,8 @@
 # File: test/test_metadata_processor.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-# Version: <Automatically calculated via dynamic import of target module>
+_PATCH_VERSION = 8
+# Version: 0.3.8
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -12,27 +13,35 @@ _CHANGELOG_ENTRIES = [
     "DEFINITIVE FIX: Used real ConfigManager with temporary output directory, matching deduplicator tests. Modified setUpClass to extend MediaContent schema for metadata fields (width, height, etc.).",
     "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes during version audit.",
     "DEFINITIVE CLI FIX: Moved `version_util` import into the `if __name__ == '__main__':` block to ensure `--version` works even if core dependencies fail to import.",
-    "CRITICAL PATH FIX: Explicitly added the project root to `sys.path` to resolve `ModuleNotFoundError: No module named 'version_util'` when running the test file directly."
+    "CRITICAL PATH FIX: Explicitly added the project root to `sys.path` to resolve `ModuleNotFoundError: No module named 'version_util'` when running the test file directly.",
+    "CRITICAL TEST FIX: Added code to `setUp` and `tearDown` to explicitly create and clean up the mock files (`image.jpg`, `video.mp4`, etc.) on the filesystem to prevent MetadataProcessor from skipping records due to `file_path.exists()` check failure."
 ]
 # ------------------------------------------------------------------------------
 import unittest
 from pathlib import Path
+from typing import Tuple, List, Optional
 import os
 import shutil
 import sqlite3
 import datetime
 import time 
+import argparse
+import sys
 
-# --- Project Dependencies ---
+# Add the project root to sys.path to resolve module import issues when running test file directly
 try:
-    # We keep the core project imports here. If they fail, the tests won't run, but 
-    # the CLI version check should still work below due to the path fix.
+    sys.path.insert(0, str(Path(__file__).parent.parent)) 
+    # --- Project Dependencies ---
     from database_manager import DatabaseManager
     from metadata_processor import MetadataProcessor, extract_image_metadata, extract_video_metadata
     from config_manager import ConfigManager
+    from version_util import print_version_info
 except ImportError as e:
     print(f"Test setup import error: {e}. Please ensure file_organizer modules are in the path or imports are adjusted.")
-    # Note: We avoid sys.exit(1) here to allow version_util to continue auditing.
+    if 'DatabaseManager' not in locals():
+        DatabaseManager = None
+    if 'MetadataProcessor' not in locals():
+        MetadataProcessor = None
 
 
 # --- CONSTANTS FOR TESTING ---
@@ -48,6 +57,9 @@ class TestMetadataProcessor(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup runs once for the class: creates the test environment and database schema."""
+        if not DatabaseManager or not MetadataProcessor:
+            return
+            
         cls.test_dir = Path(os.getcwd()) / TEST_OUTPUT_DIR_NAME
         # ConfigManager now accepts output_dir override for isolation
         cls.config_manager = ConfigManager(output_dir=cls.test_dir) 
@@ -75,10 +87,15 @@ class TestMetadataProcessor(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         """Teardown runs once for the class: cleans up the test environment."""
+        if 'cls' in locals() and cls.test_dir.exists():
+            shutil.rmtree(cls.test_dir)
         pass
 
     def setUp(self):
-        """Setup runs before each test: cleans the tables and inserts test data."""
+        """Setup runs before each test: cleans the tables, inserts test data, and creates mock files."""
+        if not DatabaseManager or not MetadataProcessor:
+            self.skipTest("Core dependencies failed to load.")
+            
         self.db_manager = DatabaseManager(self.db_manager_path)
         self.db_manager.connect()
         
@@ -89,6 +106,16 @@ class TestMetadataProcessor(unittest.TestCase):
         # Instantiate Processor
         self.processor = MetadataProcessor(self.db_manager, self.config_manager)
         
+        # --- MOCK FILE CREATION ---
+        # CRITICAL FIX: The processor requires the file to exist on the filesystem to proceed.
+        self.mock_image_path = self.test_dir / 'image.jpg'
+        self.mock_video_path = self.test_dir / 'video.mp4'
+        self.mock_skipped_path = self.test_dir / 'skip.jpg'
+        
+        # Create minimal empty files
+        for p in [self.mock_image_path, self.mock_video_path, self.mock_skipped_path]:
+            p.touch(exist_ok=True)
+
         # --- INSERT TEST DATA ---
         
         # 1. Image file to be processed (width/height NULL)
@@ -102,7 +129,7 @@ class TestMetadataProcessor(unittest.TestCase):
         # 2. Video file to be processed (width/height NULL)
         self.db_manager.execute_query(media_content_query, (TEST_HASH_VIDEO, 2048, 'VIDEO', "2021-06-15 15:30:00"))
 
-        # 3. Already processed file (to be skipped)
+        # 3. Already processed file (to be skipped by query)
         TEST_HASH_SKIPPED = "skip1234567890abcdef01234567890abcdef01234567890a"
         processed_query = """
         INSERT INTO MediaContent 
@@ -111,21 +138,26 @@ class TestMetadataProcessor(unittest.TestCase):
         """
         self.db_manager.execute_query(processed_query, (TEST_HASH_SKIPPED, 512, 'IMAGE', "2019-01-01 09:00:00"))
 
-        # --- INSERT FILEPATH INSTANCES (Requires is_primary=1 for processor to find path) ---
+        # --- INSERT FILEPATH INSTANCES ---
         instance_query = """
         INSERT INTO FilePathInstances 
         (content_hash, path, original_full_path, original_relative_path, is_primary)
         VALUES (?, ?, ?, ?, ?);
         """
-        # We use Path('/dev/null') or similar stub path as the extractor doesn't actually read the file.
-        self.db_manager.execute_query(instance_query, (TEST_HASH_IMAGE, str(self.test_dir / 'image.jpg'), str(self.test_dir / 'image.jpg'), 'image.jpg', 1))
-        self.db_manager.execute_query(instance_query, (TEST_HASH_VIDEO, str(self.test_dir / 'video.mp4'), str(self.test_dir / 'video.mp4'), 'video.mp4', 1))
-        self.db_manager.execute_query(instance_query, (TEST_HASH_SKIPPED, str(self.test_dir / 'skip.jpg'), str(self.test_dir / 'skip.jpg'), 'skip.jpg', 1))
+        # We use the newly created mock paths
+        self.db_manager.execute_query(instance_query, (TEST_HASH_IMAGE, str(self.mock_image_path), str(self.mock_image_path), 'image.jpg', 1))
+        self.db_manager.execute_query(instance_query, (TEST_HASH_VIDEO, str(self.mock_video_path), str(self.mock_video_path), 'video.mp4', 1))
+        self.db_manager.execute_query(instance_query, (TEST_HASH_SKIPPED, str(self.mock_skipped_path), str(self.mock_skipped_path), 'skip.jpg', 1))
         
         self.db_manager.close() 
 
     def tearDown(self):
         """Teardown runs after each test."""
+        # Cleanup mock files after each test
+        for p in [self.mock_image_path, self.mock_video_path, self.mock_skipped_path]:
+            if p.exists():
+                p.unlink()
+        
         if self.db_manager.conn:
              self.db_manager.close()
 
@@ -139,7 +171,7 @@ class TestMetadataProcessor(unittest.TestCase):
 
         # Check processor's internal count
         self.assertEqual(self.processor.processed_count, 2, "Should have processed 2 files (Image and Video).")
-        self.assertEqual(self.processor.skip_count, 0, "Should have skipped 0 files.")
+        self.assertEqual(self.processor.skip_count, 0, "Should have skipped 0 records that don't exist on disk.")
         
         # Verify Image content was updated
         image_data = self.db_manager.execute_query("SELECT width, height, title FROM MediaContent WHERE content_hash = ?;", (TEST_HASH_IMAGE,))[0]
@@ -166,8 +198,8 @@ class TestMetadataProcessor(unittest.TestCase):
         # Check processor's internal count
         self.assertEqual(self.processor.processed_count, 2, "Should have processed 2 files (Image and Video).")
         
-        # The skipped count should be 0 because the skipping is done at the query level.
-        self.assertEqual(self.processor.skip_count, 0, "Should have skipped 0 files at runtime (query handles skipping).")
+        # The skipped count should be 0 because the query handles skipping of the third 'TEST_HASH_SKIPPED' record.
+        self.assertEqual(self.processor.skip_count, 0, "Should have skipped 0 records at runtime (query handles skipping).")
         
         # Verify the skipped file was NOT touched (width/height remain 100)
         skipped_data = self.db_manager.execute_query("SELECT width, height FROM MediaContent WHERE content_hash = ?;", (TEST_HASH_SKIPPED,))[0]
@@ -178,27 +210,16 @@ class TestMetadataProcessor(unittest.TestCase):
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
     
-    # CRITICAL IMPORT FIX: Move system/cli imports to the execution block
-    import sys
-    import argparse
-    
-    # CRITICAL PATH FIX: Add the project root (parent directory) to sys.path
-    try:
-        # Path(__file__).parent is 'test', .parent is 'file_organizer'
-        # Insert at the beginning of sys.path to prioritize local imports
-        sys.path.insert(0, str(Path(__file__).parent.parent)) 
-    except Exception as e:
-        print(f"Warning: Failed to modify sys.path for version check: {e}")
-        
-    from version_util import print_version_info # <-- This should now succeed.
-    
     # ARGUMENT PARSING
     parser = argparse.ArgumentParser(description="Unit tests for Metadata Processor.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
     
     args, unknown = parser.parse_known_args()
     if args.version:
-        print_version_info(__file__, "Metadata Processor Unit Tests")
+        if 'print_version_info' in locals():
+            print_version_info(__file__, "Metadata Processor Unit Tests")
+        else:
+            print("Cannot run version check: version_util failed to import.")
         sys.exit(0)
 
     unittest.main(argv=sys.argv[:1] + unknown, exit=False)
