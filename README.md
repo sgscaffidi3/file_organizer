@@ -1,11 +1,12 @@
 # ==============================================================================
 # File: README.md
-# Version: 0.1
+# Version: 0.3.4
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 # 1. Initial creation of the README file with project description and setup instructions.
 # 2. Updated documentation to reflect the new JSON-based configuration managed by `config_manager.py`.
 # 3. Project name changed from "Personal Media Organizer and Deduplicator" to "File Organizer".
+# 4. Updated version to 0.3.4, synchronized changelog, and clarified dependency and output path details.
 # ------------------------------------------------------------------------------
 
 # 🗄️ File Organizer
@@ -37,7 +38,7 @@ The project follows a modular, pipeline-based approach: Scan -> Process Metadata
     ```
 
 3.  **Install Dependencies:**
-    *(Currently, dependencies are minimal, but this will be updated in the next step to include libraries like Pillow for metadata.)*
+    Dependencies include libraries for metadata processing, such as **Pillow** (for image metadata) and potentially **MoviePy/pydicom** (for video and specialized files).
     ```bash
     pip install -r requirements.txt 
     ```
@@ -56,7 +57,13 @@ The dynamic settings for the project are managed via a **JSON file**.
 3.  **Review Preferences:**
     * Review the `"file_groups"` and `"organization"` settings to match your desired organizational preferences.
 
-### 4. Initialization
+### 4. Final Organized Path Format
+
+The final path is deterministically calculated as:
+`OUTPUT_DIR/YEAR/MONTH/HASH_FILEID.EXT`
+*(Example: organized_media_output/2025/11/a4b2c3d4e5f6_12345.jpg)*
+
+### 5. Initialization
 
 Before running the full scan, you must initialize the database schema. You can use the standalone execution command:
 
