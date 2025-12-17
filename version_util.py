@@ -2,6 +2,7 @@
 # File: version_util.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
+_PATCH_VERSION = 11
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -16,6 +17,7 @@ _CHANGELOG_ENTRIES = [
     "Added --get_all command to audit the version and format status of all files.",
     "CRITICAL FIX: Updated VERSION_CHECK_FILES to correctly locate test files within the 'test' subdirectory, resolving FILE NOT FOUND errors during audit.",
     "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output to 40 characters for cleaner display of long test file names.",
+    "Updated VERSION_CHECK_FILES to include new utility and test files: `libraries_helper.py`, `demo_libraries.py`, and `test/test_libraries.py`."
 ]
 # ------------------------------------------------------------------------------
 
@@ -32,6 +34,8 @@ VERSION_CHECK_FILES = [
     "metadata_processor.py",
     "migrator.py",
     "report_generator.py",
+    "libraries_helper.py",        # <--- NEW FILE
+    "demo_libraries.py",          # <--- NEW FILE
     
     # Test files are in a 'test' subdirectory
     "test/test_all.py",
@@ -39,6 +43,7 @@ VERSION_CHECK_FILES = [
     "test/test_deduplicator.py",
     "test/test_file_scanner.py",
     "test/test_metadata_processor.py",
+    "test/test_libraries.py",     # <--- NEW TEST FILE
 ]
 
 from pathlib import Path
@@ -132,7 +137,7 @@ def get_all_file_versions(project_root: Path):
 def print_version_info(file_path: str, component_name: str, print_changelog: bool = True):
     """
     Prints the version information and changelog for a single file 
-    by dynamically loading its variables. (No changes here, remains robust)
+    by dynamically loading its variables.
     """
     file_path_obj = Path(file_path).resolve()
     
