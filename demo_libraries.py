@@ -2,72 +2,105 @@
 # File: demo_libraries.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 3
-# Version: 0.3.3
+_PATCH_VERSION = 7
+# Version: 0.3.7
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "Initial creation of the demo file to showcase external library features.",
     "Implemented TQDM progress bar demonstration.",
-    "Implemented Pillow metadata extraction demonstration (requires a dummy image file)."
+    "Implemented Pillow metadata extraction demonstration.",
+    "FEATURE UPGRADE: Updated to dynamically process all files in 'test_assets'.",
+    "UX FIX: Integrated tqdm.write() to display metadata without breaking the progress bar.",
+    "SYNC: Added support for both image and video extraction using project classes."
 ]
 # ------------------------------------------------------------------------------
 import sys
 import argparse
 from pathlib import Path
-from libraries_helper import (
-    get_library_versions, 
-    demo_tqdm_progress, 
-    extract_image_metadata
-)
+
+# Ensure project root is in path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from libraries_helper import get_library_versions
+from metadata_processor import extract_image_metadata, extract_video_metadata
+
+# Constants
+TEST_ASSETS_DIR = Path("test_assets")
 
 def run_demo():
-    """Runs a complete demonstration of the external library utilities."""
+    """Runs a demonstration of library utilities against the test_assets directory."""
     
     print("=" * 60)
-    print("EXTERNAL LIBRARY FEATURE DEMONSTRATION")
+    print("EXTERNAL LIBRARY FEATURE DEMONSTRATION: ASSET SCAN")
     print("=" * 60)
     
     # 1. Library Version Check
     versions = get_library_versions()
     print("--- Library Versions ---")
-    for lib, version in versions.items():
+    for lib in ['tqdm', 'Pillow', 'hachoir']:
+        version = versions.get(lib, "Not Installed")
         print(f"  {lib:<10}: {version}")
+
+    # 2. Check for test_assets directory
+    if not TEST_ASSETS_DIR.exists():
+        print(f"\nERROR: '{TEST_ASSETS_DIR}' directory not found.")
+        print("Please run the test script with --gen_test_data first.")
+        return
+
+    # 3. Process all files in test_assets
+    asset_files = list(TEST_ASSETS_DIR.glob("*.*"))
+    if not asset_files:
+        print(f"\nNo files found in {TEST_ASSETS_DIR.resolve()}")
+        return
+
+    print(f"\n--- Processing {len(asset_files)} assets found in {TEST_ASSETS_DIR} ---")
     
-    # 2. TQDM Progress Bar Demo
-    if versions.get('tqdm') != "Not Installed":
-        data_to_process = list(range(200))
-        demo_tqdm_progress(data_to_process, "Hashing simulation")
+    # Use TQDM to wrap the file processing loop if available
+    use_tqdm = versions.get('tqdm') != "Not Installed"
+    if use_tqdm:
+        from tqdm import tqdm
+        iterator = tqdm(asset_files, desc="Extracting Metadata")
     else:
-        print("\nSkipping TQDM demo: Library not available.")
+        iterator = asset_files
 
+    for file_path in iterator:
+        ext = file_path.suffix.lower()
+        metadata = {}
+        media_type = "UNKNOWN"
 
-    # 3. Pillow Metadata Extraction Demo
-    if versions.get('Pillow') != "Not Installed":
-        # NOTE: This requires a placeholder file to run fully.
-        # We will use a non-existent path and demonstrate the error handling path.
-        dummy_file_path = Path("test_data/sample_image.jpg")
-        
-        print(f"\n--- Pillow Metadata Extraction Demo ---")
-        print(f"Attempting to process: {dummy_file_path.resolve()}")
-        
-        metadata = extract_image_metadata(dummy_file_path)
-        
-        if 'error' in metadata:
-            print(f"Result: {metadata['error']}")
-            print("Note: Create a dummy image file at the specified path to see successful output.")
+        # Determine extraction logic based on file type
+        if ext in ['.jpg', '.jpeg', '.png']:
+            media_type = "IMAGE"
+            if versions.get('Pillow') != "Not Installed":
+                metadata = extract_image_metadata(file_path)
+        elif ext in ['.mp4', '.mov', '.avi']:
+            media_type = "VIDEO"
+            if versions.get('hachoir') != "Not Installed":
+                metadata = extract_video_metadata(file_path)
+
+        # Prepare formatted output string
+        output_lines = [f"\n[{media_type}] {file_path.name}"]
+        if not metadata:
+            output_lines.append("  Result: No metadata extracted or library missing.")
         else:
-            print("Metadata Extracted Successfully:")
             for key, value in metadata.items():
-                print(f"  {key:<15}: {value}")
-    else:
-        print("\nSkipping Pillow demo: Library not available.")
+                output_lines.append(f"    {key:<15}: {value}")
+        
+        final_output = "\n".join(output_lines)
+
+        # Print using tqdm.write to preserve the progress bar, or standard print otherwise
+        if use_tqdm:
+            iterator.write(final_output)
+        else:
+            print(final_output)
 
     print("\n" + "=" * 60)
+    print("DEMO COMPLETE")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Demonstrates external library usage (tqdm, Pillow).")
+    parser = argparse.ArgumentParser(description="Demonstrates external library usage on test_assets.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
     args = parser.parse_args()
 
