@@ -9,14 +9,18 @@ _CHANGELOG_ENTRIES = [
     "Initial creation to manage dynamic settings loaded from a JSON file.",
     "Project name changed to \"file_organizer\" in descriptions.",
     "Added CLI argument parsing for --version to allow clean exit during health checks.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning."
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
+    "CRITICAL FIX: Added optional `output_dir` to `__init__` to enable test environment isolation, resolving `AttributeError` in test suite setup.",
+    "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes."
 ]
 # ------------------------------------------------------------------------------
 import json
 from pathlib import Path
-from typing import Dict, Any, List
-import argparse
-import sys
+from typing import Dict, Any, List, Optional
+# REMOVED: import argparse
+# REMOVED: import sys
+
+# --- Project Dependencies ---
 from version_util import print_version_info
 
 class ConfigManager:
@@ -26,41 +30,43 @@ class ConfigManager:
     """
     DEFAULT_CONFIG_FILE = Path('./organizer_config.json')
 
-    def __init__(self, config_path: Path = DEFAULT_CONFIG_FILE):
+    def __init__(self, config_path: Path = DEFAULT_CONFIG_FILE, output_dir: Optional[Path] = None):
         self.config_path = config_path
         self._data: Dict[str, Any] = self._load_config()
+        
+        # Store the output_dir internally, prioritizing the passed argument (for testing)
+        if output_dir is not None:
+            self._output_dir_override = output_dir
+        else:
+            self._output_dir_override = None
 
     def _load_config(self) -> Dict[str, Any]:
         """Loads and attempts to parse the JSON configuration file."""
         if not self.config_path.exists():
-            print(f"Error: Configuration file not found at {self.config_path}. Using default empty settings.")
-            return {
-                "paths": {}, 
-                "organization": {}, 
-                "file_groups": {}
-            }
-        
+            print(f"Warning: Configuration file not found at {self.config_path}. Using default settings.")
+            return {}
         try:
             with open(self.config_path, 'r') as f:
-                data = json.load(f)
-                return data
+                return json.load(f)
         except json.JSONDecodeError as e:
-            print(f"Error: Invalid JSON format in {self.config_path}: {e}")
-            return {
-                "paths": {}, 
-                "organization": {}, 
-                "file_groups": {}
-            }
+            print(f"Error decoding config file {self.config_path}: {e}. Using default settings.")
+            return {}
+        except Exception as e:
+            print(f"An unexpected error occurred loading config: {e}. Using default settings.")
+            return {}
 
     @property
     def SOURCE_DIR(self) -> Path:
         """Returns the source directory path, ensuring it's a Path object."""
-        # Defaults to the current directory if not found in JSON
         return Path(self._data.get('paths', {}).get('source_directory', './'))
 
     @property
     def OUTPUT_DIR(self) -> Path:
         """Returns the output directory path, ensuring it's a Path object."""
+        # CRITICAL FIX: Return the override path if provided (for testing)
+        if self._output_dir_override is not None:
+            return self._output_dir_override
+            
         return Path(self._data.get('paths', {}).get('output_directory', './organized_media_output'))
 
     @property
@@ -75,6 +81,10 @@ class ConfigManager:
 
 if __name__ == "__main__":
     
+    # CRITICAL IMPORT FIX: Move system/cli imports to the execution block
+    import argparse 
+    import sys
+
     parser = argparse.ArgumentParser(description="Config Manager for file_organizer: Loads and validates project settings from JSON.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
     args = parser.parse_args()
@@ -88,4 +98,4 @@ if __name__ == "__main__":
         print(f"Loaded config from: {manager.config_path.resolve()}")
         print(f"Source Directory: {manager.SOURCE_DIR}")
         print(f"Output Directory: {manager.OUTPUT_DIR}")
-        print(f"Organization Strategy: {manager.ORGANIZATION_PREFS.get('deduplication_strategy', 'N/A')}")
+        print("File Groups:", manager.FILE_GROUPS)

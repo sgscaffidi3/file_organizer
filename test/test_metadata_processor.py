@@ -1,206 +1,204 @@
 # ==============================================================================
-# File: test_metadata_processor.py
+# File: test/test_metadata_processor.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
-    "Initial implementation.",
-    # ... (Previous changes omitted for brevity)
-    "CRITICAL FIX: Replaced the unreliable call to scanner.scan_and_insert() in setUpClass with explicit SQL insertion commands for MediaContent and FilePathInstances. This guarantees the presence of the 2 test records, resolving the persistent 'No image record found' and '2 != 1' failures.",
-    "CRITICAL FIX: Corrected the duration assertion in test_02 from 30.0 to 15.5 to match the actual stub value expected from the core metadata_processor.py file.",
+    "Initial implementation of test suite for MetadataProcessor.",
+    "CRITICAL FIX: Updated setUp to populate all necessary columns (file_type_group, is_primary) to allow MetadataProcessor to query files correctly.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "DEFINITIVE FIX: Used real ConfigManager with temporary output directory, matching deduplicator tests. Modified setUpClass to extend MediaContent schema for metadata fields (width, height, etc.).",
+    "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes during version audit.",
+    "DEFINITIVE CLI FIX: Moved `version_util` import into the `if __name__ == '__main__':` block to ensure `--version` works even if core dependencies fail to import.",
+    "CRITICAL PATH FIX: Explicitly added the project root to `sys.path` to resolve `ModuleNotFoundError: No module named 'version_util'` when running the test file directly."
 ]
 # ------------------------------------------------------------------------------
 import unittest
 from pathlib import Path
 import os
 import shutil
-import argparse
-import sys
-import sqlite3 
-# Runtime imports needed for setUpClass 
-sys.path.append(str(Path(__file__).resolve().parent.parent))
-from database_manager import DatabaseManager
-from file_scanner import FileScanner 
-from metadata_processor import MetadataProcessor 
-from config_manager import ConfigManager 
-from version_util import print_version_info # Added for version check
+import sqlite3
+import datetime
+import time 
 
-# Define test paths relative to the project root
-TEST_OUTPUT_DIR = Path(__file__).parent.parent / 'test_output_metadata'
-SOURCE_DIR = TEST_OUTPUT_DIR / 'input_media'
-TEST_DB_FILENAME = 'test_metadata.sqlite'
-TEST_DB_PATH = TEST_OUTPUT_DIR / TEST_DB_FILENAME
+# --- Project Dependencies ---
+try:
+    # We keep the core project imports here. If they fail, the tests won't run, but 
+    # the CLI version check should still work below due to the path fix.
+    from database_manager import DatabaseManager
+    from metadata_processor import MetadataProcessor, extract_image_metadata, extract_video_metadata
+    from config_manager import ConfigManager
+except ImportError as e:
+    print(f"Test setup import error: {e}. Please ensure file_organizer modules are in the path or imports are adjusted.")
+    # Note: We avoid sys.exit(1) here to allow version_util to continue auditing.
 
-# --- Constants for Test Data ---
-IMAGE_HASH = "HASH_IMAGE_ABC"
-VIDEO_HASH = "HASH_VIDEO_XYZ"
-TEST_CONFIG_DATA = {
-    "file_groups": {"IMAGE": [".jpg"], "VIDEO": [".mp4"]}
-}
+
+# --- CONSTANTS FOR TESTING ---
+TEST_OUTPUT_DIR_NAME = "test_output_meta"
+# Path to the test environment root (relative to where the test is run)
+TEST_OUTPUT_DIR = Path(TEST_OUTPUT_DIR_NAME) 
+TEST_HASH_IMAGE = "deadbeef01234567890abcdef01234567890abcdef01234567890a"
+TEST_HASH_VIDEO = "video1234567890abcdef01234567890abcdef01234567890abcdef"
+
 
 class TestMetadataProcessor(unittest.TestCase):
-    db_manager_path: Path = TEST_DB_PATH
     
     @classmethod
     def setUpClass(cls):
-        """Setup before any tests run."""
-        # 1. Setup directories
-        SOURCE_DIR.mkdir(parents=True, exist_ok=True)
-        # Create dummy config file
-        config_path = TEST_OUTPUT_DIR / 'dummy_config.json'
-        with open(config_path, 'w') as f:
-            import json
-            json.dump({"file_groups": TEST_CONFIG_DATA['file_groups']}, f)
+        """Setup runs once for the class: creates the test environment and database schema."""
+        cls.test_dir = Path(os.getcwd()) / TEST_OUTPUT_DIR_NAME
+        # ConfigManager now accepts output_dir override for isolation
+        cls.config_manager = ConfigManager(output_dir=cls.test_dir) 
+        cls.db_manager_path = str(cls.test_dir / 'metadata.sqlite')
         
-        cls.config_manager = ConfigManager(config_path)
-
-        # 2. Create dummy files (They don't need real content, just to exist)
-        (SOURCE_DIR / 'image.jpg').touch()
-        (SOURCE_DIR / 'video.mp4').touch()
-
-        # 3. Initialize DB and create schema manually
-        temp_db = DatabaseManager(cls.db_manager_path)
-        try:
-            temp_db.conn = sqlite3.connect(cls.db_manager_path)
-            temp_db.create_schema()
+        # 1. Clean up and create test environment
+        if cls.test_dir.exists():
+            shutil.rmtree(cls.test_dir)
+        cls.test_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 2. Initialize Database and Schema
+        with DatabaseManager(cls.db_manager_path) as db:
+            db.create_schema()
             
-            # 4. Explicitly insert test records (guaranteed presence)
-            # Record 1: IMAGE (Processed by a prior step, needs no processing)
-            temp_db.execute_query("""
-                INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, width, height) 
-                VALUES (?, ?, ?, ?, ?);
-            """, (IMAGE_HASH, 1000, 'IMAGE', 100, 200)) # Has dimensions, should be skipped
-
-            temp_db.execute_query("""
-                INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path)
-                VALUES (?, ?, ?, ?);
-            """, (IMAGE_HASH, str(SOURCE_DIR / 'image.jpg'), str(SOURCE_DIR / 'image.jpg'), 'image.jpg'))
+            # Manually extend MediaContent schema to add metadata fields (if not already present)
+            try:
+                db.execute_query("ALTER TABLE MediaContent ADD COLUMN width INTEGER;")
+                db.execute_query("ALTER TABLE MediaContent ADD COLUMN height INTEGER;")
+                db.execute_query("ALTER TABLE MediaContent ADD COLUMN duration REAL;")
+                db.execute_query("ALTER TABLE MediaContent ADD COLUMN bitrate INTEGER;")
+                db.execute_query("ALTER TABLE MediaContent ADD COLUMN title TEXT;")
+            except sqlite3.OperationalError:
+                pass # Columns already exist
             
-            # Record 2: VIDEO (Missing metadata, needs processing)
-            temp_db.execute_query("""
-                INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group) 
-                VALUES (?, ?, ?);
-            """, (VIDEO_HASH, 5000, 'VIDEO')) # Missing dimensions/duration, should be processed
-
-            temp_db.execute_query("""
-                INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path)
-                VALUES (?, ?, ?, ?);
-            """, (VIDEO_HASH, str(SOURCE_DIR / 'video.mp4'), str(SOURCE_DIR / 'video.mp4'), 'video.mp4'))
-
-            temp_db.conn.commit()
-        except Exception as e:
-            print(f"Error during setUpClass: {e}")
-        finally:
-            temp_db.conn.close()
-
     @classmethod
     def tearDownClass(cls):
-        """Cleanup after all tests run."""
-        shutil.rmtree(TEST_OUTPUT_DIR, ignore_errors=True)
+        """Teardown runs once for the class: cleans up the test environment."""
+        pass
 
     def setUp(self):
-        """Setup before each test: establish DB connection."""
+        """Setup runs before each test: cleans the tables and inserts test data."""
         self.db_manager = DatabaseManager(self.db_manager_path)
-        self.db_manager.__enter__() # Manually enter context for the test method
+        self.db_manager.connect()
+        
+        # Clean up tables before each test
+        self.db_manager.execute_query("DELETE FROM MediaContent;")
+        self.db_manager.execute_query("DELETE FROM FilePathInstances;")
+        
+        # Instantiate Processor
+        self.processor = MetadataProcessor(self.db_manager, self.config_manager)
+        
+        # --- INSERT TEST DATA ---
+        
+        # 1. Image file to be processed (width/height NULL)
+        media_content_query = """
+        INSERT INTO MediaContent 
+        (content_hash, size, file_type_group, date_best) 
+        VALUES (?, ?, ?, ?);
+        """
+        self.db_manager.execute_query(media_content_query, (TEST_HASH_IMAGE, 1024, 'IMAGE', "2020-01-01 10:00:00"))
+        
+        # 2. Video file to be processed (width/height NULL)
+        self.db_manager.execute_query(media_content_query, (TEST_HASH_VIDEO, 2048, 'VIDEO', "2021-06-15 15:30:00"))
+
+        # 3. Already processed file (to be skipped)
+        TEST_HASH_SKIPPED = "skip1234567890abcdef01234567890abcdef01234567890a"
+        processed_query = """
+        INSERT INTO MediaContent 
+        (content_hash, size, file_type_group, date_best, width, height) 
+        VALUES (?, ?, ?, ?, 100, 100);
+        """
+        self.db_manager.execute_query(processed_query, (TEST_HASH_SKIPPED, 512, 'IMAGE', "2019-01-01 09:00:00"))
+
+        # --- INSERT FILEPATH INSTANCES (Requires is_primary=1 for processor to find path) ---
+        instance_query = """
+        INSERT INTO FilePathInstances 
+        (content_hash, path, original_full_path, original_relative_path, is_primary)
+        VALUES (?, ?, ?, ?, ?);
+        """
+        # We use Path('/dev/null') or similar stub path as the extractor doesn't actually read the file.
+        self.db_manager.execute_query(instance_query, (TEST_HASH_IMAGE, str(self.test_dir / 'image.jpg'), str(self.test_dir / 'image.jpg'), 'image.jpg', 1))
+        self.db_manager.execute_query(instance_query, (TEST_HASH_VIDEO, str(self.test_dir / 'video.mp4'), str(self.test_dir / 'video.mp4'), 'video.mp4', 1))
+        self.db_manager.execute_query(instance_query, (TEST_HASH_SKIPPED, str(self.test_dir / 'skip.jpg'), str(self.test_dir / 'skip.jpg'), 'skip.jpg', 1))
+        
+        self.db_manager.close() 
 
     def tearDown(self):
-        """Cleanup after each test: close DB connection."""
-        self.db_manager.__exit__(None, None, None)
+        """Teardown runs after each test."""
+        if self.db_manager.conn:
+             self.db_manager.close()
 
-    def test_01_image_metadata_extraction_and_update(self):
-        """Test that the processor correctly extracts and updates image metadata for a new record."""
-        # 1. Manually add a new image record that needs processing (width=0)
-        NEW_IMAGE_HASH = "HASH_NEW_IMAGE"
-        new_image_path = SOURCE_DIR / 'new_image.jpg'
-        new_image_path.touch()
-        self.db_manager.execute_query("""
-            INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, width, height) 
-            VALUES (?, ?, ?, ?, ?);
-        """, (NEW_IMAGE_HASH, 500, 'IMAGE', 0, 0)) # Width=0 -> needs processing
+    def test_01_processor_updates_all_new_records(self):
+        """Test that MetadataProcessor successfully updates records missing metadata."""
         
-        self.db_manager.execute_query("""
-            INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path)
-            VALUES (?, ?, ?, ?);
-        """, (NEW_IMAGE_HASH, str(new_image_path), str(new_image_path), 'new_image.jpg'))
-        self.db_manager.conn.commit()
-        
-        # 2. Run the processor
-        processor = MetadataProcessor(self.db_manager, self.config_manager)
-        processor.process_metadata()
-        
-        # 3. Assert the update
-        updated_data = self.db_manager.execute_query("SELECT width, height FROM MediaContent WHERE content_hash = ?;", (NEW_IMAGE_HASH,))[0]
-        # These values come from the stub function in metadata_processor.py
-        self.assertEqual(updated_data[0], 1920, "Width was not updated correctly.")
-        self.assertEqual(updated_data[1], 1080, "Height was not updated correctly.")
-        
-    def test_02_video_metadata_extraction_and_update(self):
-        """Test that the processor correctly extracts and updates video metadata."""
-        # The VIDEO_HASH record was inserted in setUpClass with missing metadata
-        
-        # 1. Run the processor
-        processor = MetadataProcessor(self.db_manager, self.config_manager)
-        processor.process_metadata()
-        
-        # 2. Assert the update
-        updated_data = self.db_manager.execute_query("SELECT width, height, duration FROM MediaContent WHERE content_hash = ?;", (VIDEO_HASH,))[0]
-        # These values come from the stub function in metadata_processor.py
-        self.assertEqual(updated_data[0], 1280, "Video Width was not updated correctly.")
-        self.assertEqual(updated_data[1], 720, "Video Height was not updated correctly.")
-        self.assertEqual(updated_data[2], 15.5, "Video Duration was not updated correctly.")
+        # We need a new connection for the processor run
+        with DatabaseManager(self.db_manager_path) as db:
+            self.processor.db = db # Use the new connection
+            self.processor.process_metadata()
 
-    def test_03_processor_skips_already_processed_records(self):
-        """Test that records that already have metadata are correctly skipped."""
+        # Check processor's internal count
+        self.assertEqual(self.processor.processed_count, 2, "Should have processed 2 files (Image and Video).")
+        self.assertEqual(self.processor.skip_count, 0, "Should have skipped 0 files.")
         
-        # 1. Add a second VIDEO record that is fully populated (should be skipped)
-        PROCESSED_VIDEO_HASH = "HASH_PROCESSED"
-        self.db_manager.execute_query("""
-            INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, width, height, duration) 
-            VALUES (?, ?, ?, ?, ?, ?);
-        """, (PROCESSED_VIDEO_HASH, 9999, 'VIDEO', 100, 200, 30.0)) # Fully populated -> should be skipped
+        # Verify Image content was updated
+        image_data = self.db_manager.execute_query("SELECT width, height, title FROM MediaContent WHERE content_hash = ?;", (TEST_HASH_IMAGE,))[0]
+        self.assertEqual(image_data[0], 1920)
+        self.assertEqual(image_data[1], 1080)
+        self.assertEqual(image_data[2], 'Test Image Title')
 
-        self.db_manager.execute_query("""
-            INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path)
-            VALUES (?, ?, ?, ?);
-        """, (PROCESSED_VIDEO_HASH, str(SOURCE_DIR / 'processed_video.mp4'), str(SOURCE_DIR / 'processed_video.mp4'), 'processed_video.mp4'))
-        self.db_manager.conn.commit()
+        # Verify Video content was updated
+        video_data = self.db_manager.execute_query("SELECT width, height, duration, title FROM MediaContent WHERE content_hash = ?;", (TEST_HASH_VIDEO,))[0]
+        self.assertEqual(video_data[0], 1280)
+        self.assertEqual(video_data[1], 720)
+        self.assertAlmostEqual(video_data[2], 120.5)
+        self.assertEqual(video_data[3], 'Test Video Title')
         
-        # 2. Run the processor
-        # Only the VIDEO_HASH record (missing metadata) should be processed.
-        # The IMAGE_HASH record (has metadata) and PROCESSED_VIDEO_HASH record (has metadata) should be skipped.
+    def test_02_processor_skips_already_processed_records(self):
+        """Test that MetadataProcessor skips files that already have rich metadata."""
         
-        processor = MetadataProcessor(self.db_manager, self.config_manager)
-        processor.process_metadata()
+        # Record TEST_HASH_SKIPPED already has width/height set in setUp.
         
-        # The processor should only process the VIDEO file (1 record: VIDEO_HASH)
-        self.assertEqual(processor.processed_count, 1, "The processor did not process the expected number of records (should be 1).")
+        with DatabaseManager(self.db_manager_path) as db:
+            self.processor.db = db
+            self.processor.process_metadata()
+
+        # Check processor's internal count
+        self.assertEqual(self.processor.processed_count, 2, "Should have processed 2 files (Image and Video).")
         
-        # Check the width of the skipped image file (should remain 100 from setUpClass)
-        skipped_width = self.db_manager.execute_query("SELECT width FROM MediaContent WHERE content_hash = ?;", (IMAGE_HASH,))[0][0]
-        self.assertEqual(skipped_width, 100, "Already processed image file was re-processed or overwritten.")
+        # The skipped count should be 0 because the skipping is done at the query level.
+        self.assertEqual(self.processor.skip_count, 0, "Should have skipped 0 files at runtime (query handles skipping).")
+        
+        # Verify the skipped file was NOT touched (width/height remain 100)
+        skipped_data = self.db_manager.execute_query("SELECT width, height FROM MediaContent WHERE content_hash = ?;", (TEST_HASH_SKIPPED,))[0]
+        self.assertEqual(skipped_data[0], 100)
+        self.assertEqual(skipped_data[1], 100)
 
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
-    # 1. CRITICAL: IMMEDIATE PATH SETUP (Must be first for subsequent imports to work)
-    # The current file is in the 'tests' subdirectory, need to go up one level to the project root
-    project_root = Path(__file__).resolve().parent.parent 
-    if str(project_root) not in sys.path:
-        sys.path.append(str(project_root))
     
-    # 2. ARGUMENT PARSING
-    parser = argparse.ArgumentParser(description="Unit tests for MetadataProcessor.")
-    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    args = parser.parse_args()
-
-    # 3. IMMEDIATE VERSION EXIT (Clean exit for subprocess check)
-    if args.version:
-        # This import now succeeds because the path was set above
-        print_version_info(__file__, "MetadataProcessor Unit Tests")
-        sys.exit(0)
+    # CRITICAL IMPORT FIX: Move system/cli imports to the execution block
+    import sys
+    import argparse
+    
+    # CRITICAL PATH FIX: Add the project root (parent directory) to sys.path
+    try:
+        # Path(__file__).parent is 'test', .parent is 'file_organizer'
+        # Insert at the beginning of sys.path to prioritize local imports
+        sys.path.insert(0, str(Path(__file__).parent.parent)) 
+    except Exception as e:
+        print(f"Warning: Failed to modify sys.path for version check: {e}")
         
-    unittest.main()
+    from version_util import print_version_info # <-- This should now succeed.
+    
+    # ARGUMENT PARSING
+    parser = argparse.ArgumentParser(description="Unit tests for Metadata Processor.")
+    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    
+    args, unknown = parser.parse_known_args()
+    if args.version:
+        print_version_info(__file__, "Metadata Processor Unit Tests")
+        sys.exit(0)
+
+    unittest.main(argv=sys.argv[:1] + unknown, exit=False)

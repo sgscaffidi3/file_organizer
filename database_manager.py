@@ -16,15 +16,18 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' to maintain consistency with the field name used in deduplicator.py's SQL queries.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
     "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "CRITICAL SCHEMA FIX: Added the `date_modified` column to the `FilePathInstances` table to support deduplication logic based on file modification time (Resolves all `test_deduplicator` errors).",
+    "CRITICAL SCHEMA FIX: Added the `date_modified` column to the `FilePathInstances` table to support deduplication logic based on file modification time.",
     "CRITICAL API FIX: Updated `execute_query` to return the `rowcount` (number of affected/inserted rows) for non-SELECT queries. (Required for `FileScanner` to track insertions).",
-    "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`. This resolves the `IntegrityError: NOT NULL constraint failed` in `test_database_manager` and should fix all cascading test failures."
+    "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`. This resolves the `IntegrityError: NOT NULL constraint failed` and prevents cascading errors."
 ]
 # ------------------------------------------------------------------------------
 import sqlite3
 from typing import Optional, Tuple, List
 import os
+import sys
+import argparse
 from contextlib import contextmanager
+# from version_util import print_version_info # Assuming this is available
 
 class DatabaseManager:
     """
@@ -48,8 +51,6 @@ class DatabaseManager:
     def connect(self):
         """Establishes a connection to the SQLite database."""
         if self.conn is None:
-            # Note: Isolation level is set to None for autocommit mode, 
-            # as per standard practice unless explicit transactions are needed.
             self.conn = sqlite3.connect(self.db_path)
             # Enable foreign key constraint enforcement
             self.conn.execute('PRAGMA foreign_keys = ON;')
@@ -114,10 +115,9 @@ class DatabaseManager:
         """
         
         # FilePathInstances: List of all file locations. 
-        # The 'path' column MUST be UNIQUE to prevent re-insertion on re-scan.
         instance_table_sql = """
         CREATE TABLE IF NOT EXISTS FilePathInstances (
-            file_id INTEGER PRIMARY KEY, -- CRITICAL FIX (8): Renamed from 'id' to 'file_id'
+            file_id INTEGER PRIMARY KEY,
             content_hash TEXT NOT NULL,
             path TEXT UNIQUE NOT NULL, 
             original_full_path TEXT NOT NULL,
@@ -125,11 +125,11 @@ class DatabaseManager:
             
             -- Metadata derived from file system:
             date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
-            date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Added default value for NOT NULL constraint
+            date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Add date_modified
             
             -- Deduplication/Organization fields:
-            is_primary BOOLEAN DEFAULT 0, -- Set to 1 if this is the chosen primary instance
-            new_path_id INTEGER, -- FK to itself (id of the instance that holds the new path)
+            is_primary BOOLEAN DEFAULT 0,
+            new_path_id INTEGER,
 
             FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) ON DELETE CASCADE
         );
@@ -146,8 +146,6 @@ class DatabaseManager:
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
-    import argparse
-    import sys
     
     parser = argparse.ArgumentParser(description="Database Manager Utility")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')

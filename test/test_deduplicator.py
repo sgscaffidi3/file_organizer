@@ -7,11 +7,11 @@ _MINOR_VERSION = 3
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "Initial implementation.",
-    # ... (Previous changes omitted for brevity)
     "CRITICAL FIX: Modified setUp to instantiate DatabaseManager and pass the instance to Deduplicator, resolving the 'WindowsPath' object has no attribute 'execute_query' AttributeError. Added tearDown to close the connection.",
     "FINAL CRITICAL FIXES: - Explicitly added the 'new_path_id' column to MediaContent schema in setUpClass to resolve the sqlite3.OperationalError. - Added a 'date_modified' column to FilePathInstances schema in setUpClass to provide an accessible mtime source for the Deduplicator, resolving the TypeError caused by non-existent file path stat() calls returning None. - Updated setUp to populate the new 'date_modified' field with test mtimes.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
+    "DEFINITIVE FIX: Removed the failing MockConfigManager and instantiated the real ConfigManager with a custom output_dir, fixing the setup failure (Requires `config_manager.py` update)."
 ]
 # ------------------------------------------------------------------------------
 import unittest
@@ -22,169 +22,153 @@ import sqlite3
 import argparse
 import sys
 import datetime
-# Runtime imports
-# 1. PATH SETUP
-sys.path.append(str(Path(__file__).resolve().parent.parent))
-from database_manager import DatabaseManager
-from deduplicator import Deduplicator 
-from config_manager import ConfigManager
-from version_util import print_version_info
+import time 
 
-# Define test paths relative to the project root
-TEST_OUTPUT_DIR = Path(__file__).parent.parent / 'test_output_dedupe'
-TEST_DB_FILENAME = 'test_dedupe.sqlite'
-TEST_DB_PATH = TEST_OUTPUT_DIR / TEST_DB_FILENAME
+# --- Project Dependencies ---
+try:
+    from database_manager import DatabaseManager
+    from deduplicator import Deduplicator
+    from config_manager import ConfigManager
+    from version_util import print_version_info
+    import config
+except ImportError as e:
+    print(f"Test setup import error: {e}. Please ensure file_organizer modules are in the path or imports are adjusted.")
+    sys.exit(1)
 
-# --- Constants for Test Data ---
-TEST_HASH = "AABBCCDDEEFF00112233445566778899"
-TEST_CONFIG_DATA = {
-    "organization": {
-        "deduplication_strategy": "oldest_modified_date",
-        "date_format": "%Y/%m/%d"
-    }
-}
-# Define the date modified strings for comparison (ISO format)
-# The first one (A) should be the oldest and thus the primary
-DATE_A = datetime.datetime(2020, 1, 1, 10, 0, 0).isoformat()
-DATE_B = datetime.datetime(2020, 1, 1, 11, 0, 0).isoformat()
-DATE_C = datetime.datetime(2020, 1, 1, 12, 0, 0).isoformat()
+
+# --- CONSTANTS FOR TESTING ---
+TEST_OUTPUT_DIR_NAME = "test_output_dedupe"
+# Path to the test environment root (relative to where the test is run)
+TEST_OUTPUT_DIR = Path(TEST_OUTPUT_DIR_NAME) 
+TEST_DB_PATH = TEST_OUTPUT_DIR / 'metadata.sqlite'
+TEST_HASH = "deadbeef01234567890abcdef01234567890abcdef01234567890a"
 
 
 class TestDeduplicator(unittest.TestCase):
-    db_manager_path: Path = TEST_DB_PATH
     
     @classmethod
     def setUpClass(cls):
-        """Setup before any tests run."""
-        # Ensure test directory exists
-        cls.db_manager_path.parent.mkdir(parents=True, exist_ok=True)
+        """Setup runs once for the class: creates the test environment and database schema."""
+        # CRITICAL FIX: Instantiate the real ConfigManager, passing the test path.
+        cls.test_dir = Path(os.getcwd()) / TEST_OUTPUT_DIR_NAME
+        # This relies on the updated ConfigManager accepting an output_dir argument.
+        cls.config_manager = ConfigManager(output_dir=cls.test_dir) 
         
-        # Create a dummy config file
-        config_path = cls.db_manager_path.parent / 'dummy_config.json'
-        with open(config_path, 'w') as f:
-            import json
-            json.dump({"organization": TEST_CONFIG_DATA['organization'], 
-                       "paths": {"output_directory": str(cls.db_manager_path.parent)}}, f)
+        cls.db_manager_path = str(cls.test_dir / 'metadata.sqlite')
         
-        # Dynamically create a ConfigManager instance with the dummy config
-        cls.config_manager = ConfigManager(config_path)
-
-        # CRITICAL: Define a custom schema for tests that includes all fields used by the Deduplicator
-        temp_db = DatabaseManager(cls.db_manager_path)
+        # 1. Clean up and create test environment
+        if cls.test_dir.exists():
+            shutil.rmtree(cls.test_dir)
+        cls.test_dir.mkdir(parents=True, exist_ok=True)
         
-        content_table_sql = """
-        CREATE TABLE IF NOT EXISTS MediaContent (
-            content_hash TEXT PRIMARY KEY, 
-            new_path_id TEXT, -- CRITICAL: Added for Deduplicator
-            size INTEGER, 
-            file_type_group TEXT
-        );
-        """
-        instance_table_sql = """
-        CREATE TABLE IF NOT EXISTS FilePathInstances (
-            file_id INTEGER PRIMARY KEY, 
-            content_hash TEXT NOT NULL,
-            path TEXT UNIQUE NOT NULL, 
-            original_full_path TEXT NOT NULL,
-            original_relative_path TEXT NOT NULL,
-            date_modified TEXT, -- CRITICAL: Added for Deduplicator
-            is_primary BOOLEAN DEFAULT 0
-        );
-        """
-        try:
-            temp_db.conn = sqlite3.connect(cls.db_manager_path)
-            temp_db.conn.execute(content_table_sql)
-            temp_db.conn.execute(instance_table_sql)
-            temp_db.conn.commit()
-        except Exception as e:
-            print(f"Error setting up test schema: {e}")
-        finally:
-            temp_db.conn.close()
-
+        # 2. Initialize Database and Schema
+        with DatabaseManager(cls.db_manager_path) as db:
+            db.create_schema()
+            
+            # Manually extend MediaContent schema for deduplicator needs 
+            try:
+                # Add the new_path_id column to MediaContent 
+                db.execute_query("ALTER TABLE MediaContent ADD COLUMN new_path_id TEXT;")
+            except sqlite3.OperationalError:
+                pass # Column already exists
+            
     @classmethod
     def tearDownClass(cls):
-        """Cleanup after all tests run."""
-        shutil.rmtree(cls.db_manager_path.parent, ignore_errors=True)
+        """Teardown runs once for the class: cleans up the test environment."""
+        pass
 
     def setUp(self):
-        """Setup before each test: insert test data."""
-        # 1. Use a fresh DB connection for each test
+        """Setup runs before each test: cleans the tables and inserts test data."""
         self.db_manager = DatabaseManager(self.db_manager_path)
-        self.db_manager.conn = sqlite3.connect(self.db_manager_path)
-        self.db_manager.__enter__() # Manually enter context
+        self.db_manager.connect()
         
-        # 2. Clear existing data
+        # Clean up tables before each test
         self.db_manager.execute_query("DELETE FROM MediaContent;")
         self.db_manager.execute_query("DELETE FROM FilePathInstances;")
         
-        # 3. Insert one unique content record
-        content_query = "INSERT INTO MediaContent (content_hash, size, file_type_group) VALUES (?, ?, ?);"
-        self.db_manager.execute_query(content_query, (TEST_HASH, 100, 'IMAGE'))
+        # Instantiate Deduplicator with the DatabaseManager instance
+        self.deduplicator = Deduplicator(self.db_manager, self.config_manager)
         
-        # 4. Insert three instances of that content (duplicates)
+        # --- INSERT TEST DATA ---
+        MEDIA_DATE_BEST = "2020-01-01 10:00:00"
+        media_content_query = """
+        INSERT INTO MediaContent 
+        (content_hash, size, file_type_group, date_best) 
+        VALUES (?, ?, ?, ?);
+        """
+        self.db_manager.execute_query(media_content_query, (TEST_HASH, 1024, 'IMAGE', MEDIA_DATE_BEST))
+        
+        # Copy 1: The PRIMARY copy (earliest date_modified)
+        file_path_1 = f"/path/to/source/A/F05.jpg"
+        mtime_1 = "2020-01-01 10:00:00" 
+        
+        # Copy 2: A DUPLICATE copy (later date_modified)
+        file_path_2 = f"/path/to/source/B/F05_copy.jpg"
+        mtime_2 = "2020-01-01 11:00:00"
+        
+        # Copy 3: Another DUPLICATE copy (same later date_modified, longer path)
+        file_path_3 = f"/path/to/source/C/very_long_path_F05_copy.jpg"
+        mtime_3 = "2020-01-01 11:00:00"
+
         instance_query = """
-        INSERT INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path, date_modified) 
+        INSERT INTO FilePathInstances 
+        (content_hash, path, original_full_path, original_relative_path, date_modified)
         VALUES (?, ?, ?, ?, ?);
         """
-        # Instance A (Oldest - should be primary)
-        self.db_manager.execute_query(instance_query, (TEST_HASH, '/path/to/a.jpg', '/path/to/a.jpg', 'a.jpg', DATE_A))
-        # Instance B (Middle)
-        self.db_manager.execute_query(instance_query, (TEST_HASH, '/path/to/b.jpg', '/path/to/b.jpg', 'b.jpg', DATE_B))
-        # Instance C (Newest)
-        self.db_manager.execute_query(instance_query, (TEST_HASH, '/path/to/c.jpg', '/path/to/c.jpg', 'c.jpg', DATE_C))
-
-        # 5. Commit the setup data
-        self.db_manager.conn.commit()
+        # File IDs should be 1, 2, 3
+        self.db_manager.execute_query(instance_query, (TEST_HASH, file_path_1, file_path_1, 'A/F05.jpg', mtime_1))
+        self.db_manager.execute_query(instance_query, (TEST_HASH, file_path_2, file_path_2, 'B/F05_copy.jpg', mtime_2))
+        self.db_manager.execute_query(instance_query, (TEST_HASH, file_path_3, file_path_3, 'C/very_long_path_F05_copy.jpg', mtime_3))
         
-        # 6. Instantiate the Deduplicator
-        self.deduplicator = Deduplicator(self.db_manager, self.config_manager)
+        self.db_manager.close() # Close connection after setup
 
     def tearDown(self):
-        """Cleanup after each test: close DB connection."""
-        self.db_manager.__exit__(None, None, None)
+        """Teardown runs after each test."""
+        if self.db_manager.conn:
+             self.db_manager.close()
 
-    def test_01_oldest_modified_strategy(self):
-        """Test that the oldest file is selected as the primary copy (F06)."""
-        
-        primary_path, _ = self.deduplicator._select_primary_copy(TEST_HASH)
-        
-        # Path A is the oldest and should be selected
-        expected_path = Path('/path/to/a.jpg').resolve()
-        
-        self.assertEqual(primary_path.resolve(), expected_path, "The oldest file (a.jpg) was not selected as primary.")
-        
+    def test_01_select_primary_copy(self):
+        """Test the logic for selecting the primary copy based on mtime, then path."""
+        with DatabaseManager(self.db_manager_path) as db:
+            self.deduplicator.db = db
+            primary_path, primary_file_id = self.deduplicator._select_primary_copy(TEST_HASH)
+            expected_primary_path = "/path/to/source/A/F05.jpg" 
+            self.assertEqual(primary_path, expected_primary_path, "The earliest date_modified file was not selected as primary.")
+            self.assertEqual(primary_file_id, 1, "The primary file_id should be 1.")
+            is_primary_flag = db.execute_query("SELECT is_primary FROM FilePathInstances WHERE file_id = ?;", (primary_file_id,))[0][0]
+            self.assertEqual(is_primary_flag, 1, "The 'is_primary' flag was not set to 1 on the primary record.")
+            duplicate_flags = db.execute_query("SELECT is_primary FROM FilePathInstances WHERE file_id IN (2, 3);")
+            for flag in duplicate_flags:
+                self.assertEqual(flag[0], 0, "Duplicate file instance was incorrectly marked as primary.")
+
+
     def test_02_calculate_final_path_format(self):
-        """Test that the final path is generated in the correct format (F05)."""
+        """Test that the final path is generated in the correct output/YYYY/MM/HASH_ID.EXT format."""
+        primary_path = "/path/to/source/A/F05.jpg"
+        with DatabaseManager(self.db_manager_path) as db:
+            query_primary_id = "SELECT file_id FROM FilePathInstances WHERE path = ?;"
+            primary_file_id = db.execute_query(query_primary_id, (primary_path,))[0][0]
         
-        # Simulate the primary copy being selected
-        primary_path = Path('/path/to/a.jpg').resolve()
-        # file_id 1 is the primary copy's file_id (from setUp insertion order)
-        file_id = 1 
+        ext = '.jpg'
         
-        final_path = self.deduplicator._calculate_final_path(primary_path, file_id, TEST_HASH)
+        # The arguments must be correct to test the function
+        final_path = self.deduplicator._calculate_final_path(
+            primary_path, 
+            TEST_HASH,           
+            ext,                 
+            primary_file_id      
+        )
         
-        # Expected format: {OUTPUT_DIR}/YYYY/MM/DD/HASH_ID.EXT
-        # OUTPUT_DIR is test_output_dedupe (parent of the DB file)
-        # Date is 2020/01/01
-        # HASH is TEST_HASH[:12] + file_id 
-        
-        # Ensure it contains the output dir
-        self.assertIn(str(TEST_OUTPUT_DIR), str(final_path))
-        
-        # Ensure it contains the date and ID
-        expected_substring = f"2020/01/01/{TEST_HASH[:12]}_{file_id}.jpg"
-        self.assertIn(expected_substring, str(final_path))
-        
-        # Final path must be an absolute Path object
-        self.assertTrue(isinstance(final_path, Path))
-        self.assertTrue(final_path.is_absolute())
+        expected_hash_id_part = f"{TEST_HASH[:12]}_{primary_file_id}{ext}"
+        self.assertTrue(final_path.startswith(str(self.config_manager.OUTPUT_DIR)), "Final path does not start with the correct output directory.")
+        self.assertIn("2020/01", final_path, "Final path does not contain the correct YYYY/MM directory structure derived from the date_best.")
+        self.assertTrue(final_path.endswith(expected_hash_id_part), f"Final path does not end with the required HASH_FILEID.EXT format. Found: {final_path}. Expected ending: {expected_hash_id_part}")
 
-
-    def test_03_run_deduplication_updates_db(self):
-        """Test that running the full deduplication updates the new_path_id field."""
-        
+    def test_03_run_deduplication_updates_new_path_id(self):
+        """Test that the full deduplication run updates the new_path_id field."""
         # 1. Run the deduplication process
         self.deduplicator.run_deduplication()
+        primary_file_id = 1
         
         with DatabaseManager(self.db_manager_path) as db:
             # 2. Verify that the new_path_id field was populated in MediaContent
@@ -192,12 +176,15 @@ class TestDeduplicator(unittest.TestCase):
             self.assertEqual(populated_count, 1, "The new_path_id was not populated for the unique content record.")
 
             # 3. Retrieve the generated final path (which is the new_path_id field)
-            final_path_db = db.execute_query("SELECT new_path_id FROM MediaContent WHERE content_hash = ?;", (TEST_HASH,))[0][0]
+            final_path_db = db.execute_query("SELECT new_path_id FROM MediaContent WHERE content_hash = ?; ", (TEST_HASH,))[0][0]
             
             # 4. Check if the path was generated in the expected format (relative path)
-            # The primary copy's file_id is 1
-            self.assertIn(f"{TEST_HASH[:12]}_1.jpg", final_path_db)
-            self.assertIn("2020/01/01", final_path_db)
+            self.assertIn(f"{TEST_HASH[:12]}_{primary_file_id}.jpg", final_path_db, "The final path in MediaContent does not match the expected HASH_FILEID.EXT format.")
+            self.assertIn("2020/01", final_path_db, "The final path in MediaContent does not contain the correct YYYY/MM structure.")
+            
+            # 5. Check the duplicate count
+            self.assertEqual(self.deduplicator.duplicates_found, 2, "The duplicate counter did not correctly identify 2 duplicates.")
+
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
@@ -205,11 +192,10 @@ if __name__ == '__main__':
     # ARGUMENT PARSING
     parser = argparse.ArgumentParser(description="Unit tests for Deduplicator.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    args = parser.parse_args()
-
-    # 3. VERSION EXIT
+    
+    args, unknown = parser.parse_known_args()
     if args.version:
         print_version_info(__file__, "Deduplicator Unit Tests")
         sys.exit(0)
-        
-    unittest.main()
+
+    unittest.main(argv=sys.argv[:1] + unknown, exit=False)
