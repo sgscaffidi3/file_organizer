@@ -2,8 +2,8 @@
 # File: test/test_metadata_processor.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 8
-# Version: 0.3.8
+_PATCH_VERSION = 9
+# Version: 0.3.9
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -14,7 +14,8 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes during version audit.",
     "DEFINITIVE CLI FIX: Moved `version_util` import into the `if __name__ == '__main__':` block to ensure `--version` works even if core dependencies fail to import.",
     "CRITICAL PATH FIX: Explicitly added the project root to `sys.path` to resolve `ModuleNotFoundError: No module named 'version_util'` when running the test file directly.",
-    "CRITICAL TEST FIX: Added code to `setUp` and `tearDown` to explicitly create and clean up the mock files (`image.jpg`, `video.mp4`, etc.) on the filesystem to prevent MetadataProcessor from skipping records due to `file_path.exists()` check failure."
+    "CRITICAL TEST FIX: Added code to `setUp` and `tearDown` to explicitly create and clean up the mock files (`image.jpg`, `video.mp4`, etc.) on the filesystem to prevent MetadataProcessor from skipping records due to `file_path.exists()` check failure.",
+    "CRITICAL SCOPE FIX: Moved `TEST_HASH_SKIPPED` definition to class level to resolve `NameError` in verification test method."
 ]
 # ------------------------------------------------------------------------------
 import unittest
@@ -50,7 +51,7 @@ TEST_OUTPUT_DIR_NAME = "test_output_meta"
 TEST_OUTPUT_DIR = Path(TEST_OUTPUT_DIR_NAME) 
 TEST_HASH_IMAGE = "deadbeef01234567890abcdef01234567890abcdef01234567890a"
 TEST_HASH_VIDEO = "video1234567890abcdef01234567890abcdef01234567890abcdef"
-
+TEST_HASH_SKIPPED = "skip1234567890abcdef01234567890abcdef01234567890a" # <-- FIX: Moved to class level
 
 class TestMetadataProcessor(unittest.TestCase):
     
@@ -71,22 +72,30 @@ class TestMetadataProcessor(unittest.TestCase):
         cls.test_dir.mkdir(parents=True, exist_ok=True)
         
         # 2. Initialize Database and Schema
-        with DatabaseManager(cls.db_manager_path) as db:
-            db.create_schema()
+        # Use a connection to ensure schema creation, and explicitly close it.
+        try:
+            db_setup = DatabaseManager(cls.db_manager_path)
+            db_setup.connect()
+            db_setup.create_schema()
             
             # Manually extend MediaContent schema to add metadata fields (if not already present)
             try:
-                db.execute_query("ALTER TABLE MediaContent ADD COLUMN width INTEGER;")
-                db.execute_query("ALTER TABLE MediaContent ADD COLUMN height INTEGER;")
-                db.execute_query("ALTER TABLE MediaContent ADD COLUMN duration REAL;")
-                db.execute_query("ALTER TABLE MediaContent ADD COLUMN bitrate INTEGER;")
-                db.execute_query("ALTER TABLE MediaContent ADD COLUMN title TEXT;")
+                db_setup.execute_query("ALTER TABLE MediaContent ADD COLUMN width INTEGER;")
+                db_setup.execute_query("ALTER TABLE MediaContent ADD COLUMN height INTEGER;")
+                db_setup.execute_query("ALTER TABLE MediaContent ADD COLUMN duration REAL;")
+                db_setup.execute_query("ALTER TABLE MediaContent ADD COLUMN bitrate INTEGER;")
+                db_setup.execute_query("ALTER TABLE MediaContent ADD COLUMN title TEXT;")
             except sqlite3.OperationalError:
                 pass # Columns already exist
+        finally:
+             if 'db_setup' in locals() and db_setup.conn:
+                db_setup.close() # Ensure setup connection is closed
+
             
     @classmethod
     def tearDownClass(cls):
         """Teardown runs once for the class: cleans up the test environment."""
+        # Note: We rely on tearDown to clean up connections.
         if 'cls' in locals() and cls.test_dir.exists():
             shutil.rmtree(cls.test_dir)
         pass
@@ -107,7 +116,6 @@ class TestMetadataProcessor(unittest.TestCase):
         self.processor = MetadataProcessor(self.db_manager, self.config_manager)
         
         # --- MOCK FILE CREATION ---
-        # CRITICAL FIX: The processor requires the file to exist on the filesystem to proceed.
         self.mock_image_path = self.test_dir / 'image.jpg'
         self.mock_video_path = self.test_dir / 'video.mp4'
         self.mock_skipped_path = self.test_dir / 'skip.jpg'
@@ -130,7 +138,6 @@ class TestMetadataProcessor(unittest.TestCase):
         self.db_manager.execute_query(media_content_query, (TEST_HASH_VIDEO, 2048, 'VIDEO', "2021-06-15 15:30:00"))
 
         # 3. Already processed file (to be skipped by query)
-        TEST_HASH_SKIPPED = "skip1234567890abcdef01234567890abcdef01234567890a"
         processed_query = """
         INSERT INTO MediaContent 
         (content_hash, size, file_type_group, date_best, width, height) 
