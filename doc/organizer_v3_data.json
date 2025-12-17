@@ -1,0 +1,252 @@
+[
+    {
+        "id": "T01.T1",
+        "ph": "1",
+        "name": "Image EXIF Test",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.T2",
+        "ph": "1",
+        "name": "Video Dur Stub",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.T3",
+        "ph": "1",
+        "name": "Date Priority Log",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.T4",
+        "ph": "1",
+        "name": "Dep Failure Test",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.T5",
+        "ph": "1",
+        "name": "DB Persistence",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.F1",
+        "ph": "1",
+        "name": "proc_unprocessed()",
+        "est": 3,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.F2",
+        "ph": "1",
+        "name": "get_exif_data()",
+        "est": 3,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.F3",
+        "ph": "1",
+        "name": "get_video_info()",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T01.F4",
+        "ph": "1",
+        "name": "calc_date_best()",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T02.T1",
+        "ph": "2",
+        "name": "Dry-Run Safety",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T02.T2",
+        "ph": "2",
+        "name": "Path Gen Test",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T02.T3",
+        "ph": "2",
+        "name": "Perm Preservation",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T02.T4",
+        "ph": "2",
+        "name": "File Collision",
+        "est": 1,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T02.F1",
+        "ph": "2",
+        "name": "run_migration()",
+        "est": 3,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T02.F2",
+        "ph": "2",
+        "name": "prep_directory()",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T02.F3",
+        "ph": "2",
+        "name": "perform_copy()",
+        "est": 3,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T03.T1",
+        "ph": "3",
+        "name": "Space Savings Q",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T03.T2",
+        "ph": "3",
+        "name": "Group Aggregation",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T03.T3",
+        "ph": "3",
+        "name": "HTML Integrity",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T03.F1",
+        "ph": "3",
+        "name": "get_stats()",
+        "est": 5,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T03.F2",
+        "ph": "3",
+        "name": "build_index()",
+        "est": 5,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T04.T1",
+        "ph": "4",
+        "name": "E2E Workflow",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T04.T2",
+        "ph": "4",
+        "name": "CLI Flag Logic",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T04.F1",
+        "ph": "4",
+        "name": "main() Entry",
+        "est": 2,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    },
+    {
+        "id": "T04.F2",
+        "ph": "4",
+        "name": "WorkflowManager",
+        "est": 3,
+        "pc": 0,
+        "hrs": 0,
+        "status": "pending",
+        "upd": "N/A"
+    }
+]
