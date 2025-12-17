@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>File Organizer - TDD Execution Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #f0f2f5; padding: 20px; }
+        .container { max-width: 1300px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; }
+        .stat-card { background: #fff; border: 1px solid #ddd; padding: 15px; border-radius: 8px; text-align: center; }
+        .stat-card h4 { margin: 0; color: #666; font-size: 0.8em; }
+        .stat-card p { margin: 5px 0 0; font-size: 1.5em; font-weight: bold; color: #3498db; }
+        .charts { display: flex; gap: 20px; margin-bottom: 30px; }
+        .chart-box { flex: 1; background: #fff; padding: 15px; border: 1px solid #eee; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85em; }
+        th { background: #2c3e50; color: white; padding: 10px; text-align: left; }
+        td { padding: 10px; border-bottom: 1px solid #eee; vertical-align: top; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .badge { padding: 3px 7px; border-radius: 4px; color: white; font-weight: bold; font-size: 0.75em; }
+        .p-1 { border-left: 5px solid #3498db; } .p-2 { border-left: 5px solid #9b59b6; }
+        .p-3 { border-left: 5px solid #e67e22; } .p-4 { border-left: 5px solid #2ecc71; }
+        .pending { background: #95a5a6; } .active { background: #f1c40f; } .done { background: #2ecc71; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Project Execution Dashboard: File Organizer</h1>
+    <div class="summary-grid">
+        <div class="stat-card"><h4>Total TDD Items</h4><p>25</p></div>
+        <div class="stat-card"><h4>Tests Defined</h4><p>14</p></div>
+        <div class="stat-card"><h4>Functions Defined</h4><p>11</p></div>
+        <div class="stat-card"><h4>Overall Completion</h4><p id="total-pc">0%</p></div>
+    </div>
+
+    <div class="charts">
+        <div class="chart-box"><canvas id="phaseBarChart"></canvas></div>
+        <div class="chart-box"><canvas id="typePieChart"></canvas></div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th><th>Phase</th><th>Type</th><th>Task / Test Name</th><th>Status</th><th>%</th><th>Update & Next Step</th>
+            </tr>
+        </thead>
+        <tbody id="task-body">
+            </tbody>
+    </table>
+</div>
+
+<script>
+const tasks = [
+    // PHASE 1: METADATA (T01)
+    { id: "T01.T1", ph: "1. Metadata", type: "Test", name: "Image EXIF Extraction", status: "pending", pc: 0, upd: "Defined. Next: Select sample .jpg assets." },
+    { id: "T01.T2", ph: "1. Metadata", type: "Test", name: "Video Duration Stub", status: "pending", pc: 0, upd: "Defined. Next: Define mock video metadata." },
+    { id: "T01.T3", ph: "1. Metadata", type: "Test", name: "Date Priority Logic", status: "pending", pc: 0, upd: "Defined. Next: Create date-clash scenarios." },
+    { id: "T01.T4", ph: "1. Metadata", type: "Test", name: "Dependency Failure", status: "pending", pc: 0, upd: "Defined. Next: Simulate Pillow missing." },
+    { id: "T01.T5", ph: "1. Metadata", type: "Test", name: "DB Persistence", status: "pending", pc: 0, upd: "Defined. Next: Verify SQL UPDATE syntax." },
+    { id: "T01.F1", ph: "1. Metadata", type: "Func", name: "process_unprocessed_records()", status: "pending", pc: 0, upd: "Stubbed. Next: Logic for NULL dates." },
+    { id: "T01.F2", ph: "1. Metadata", type: "Func", name: "_get_exif_data()", status: "pending", pc: 0, upd: "Stubbed. Next: Pillow tag mapping." },
+    { id: "T01.F3", ph: "1. Metadata", type: "Func", name: "_get_video_info()", status: "pending", pc: 0, upd: "Stubbed. Next: Attribute check for MoviePy." },
+    { id: "T01.F4", ph: "1. Metadata", type: "Func", name: "_calculate_date_best()", status: "pending", pc: 0, upd: "Stubbed. Next: Hierarchy selection logic." },
+    
+    // PHASE 2: MIGRATOR (T02)
+    { id: "T02.T1", ph: "2. Migrator", type: "Test", name: "Dry-Run Enforcement", status: "pending", pc: 0, upd: "Next: Assert zero file ops." },
+    { id: "T02.T2", ph: "2. Migrator", type: "Test", name: "Path Generation", status: "pending", pc: 0, upd: "Next: Assert YEAR/MONTH structure." },
+    { id: "T02.T3", ph: "2. Migrator", type: "Test", name: "Permission Preservation", status: "pending", pc: 0, upd: "Next: Check mtime after copy." },
+    { id: "T02.T4", ph: "2. Migrator", type: "Test", name: "File Collision", status: "pending", pc: 0, upd: "Next: Handle existing targets." },
+    { id: "T02.F1", ph: "2. Migrator", type: "Func", name: "run_migration()", status: "pending", pc: 0, upd: "Next: DB query for primary files." },
+    { id: "T02.F2", ph: "2. Migrator", type: "Func", name: "_prepare_directory()", status: "pending", pc: 0, upd: "Next: Pathlib mkdir(parents=True)." },
+    { id: "T02.F3", ph: "2. Migrator", type: "Func", name: "_perform_copy()", status: "pending", pc: 0, upd: "Next: Shutil integration." },
+
+    // PHASE 3: REPORTING (T03)
+    { id: "T03.T1", ph: "3. Reporting", type: "Test", name: "Space Savings Query", status: "pending", pc: 0, upd: "Next: Validate math logic." },
+    { id: "T03.T2", ph: "3. Reporting", type: "Test", name: "Group Aggregation", status: "pending", pc: 0, upd: "Next: Match DB totals." },
+    { id: "T03.T3", ph: "3. Reporting", type: "Test", name: "HTML Template Integrity", status: "pending", pc: 0, upd: "Next: Assert valid tags." },
+    { id: "T03.F1", ph: "3. Reporting", type: "Func", name: "ReportGenerator.get_stats()", status: "pending", pc: 0, upd: "Next: Write SQL SUM/COUNT queries." },
+    { id: "T03.F2", ph: "3. Reporting", type: "Func", name: "HTMLGenerator.build_index()", status: "pending", pc: 0, upd: "Next: Build gallery grid." },
+
+    // PHASE 4: MAIN (T04)
+    { id: "T04.T1", ph: "4. Main/CLI", type: "Test", name: "End-to-End Workflow", status: "pending", pc: 0, upd: "Next: Mock file set run." },
+    { id: "T04.T2", ph: "4. Main/CLI", type: "Test", name: "CLI Flag Logic", status: "pending", pc: 0, upd: "Next: Test argparse triggers." },
+    { id: "T04.F1", ph: "4. Main/CLI", type: "Func", name: "main() Entry Point", status: "pending", pc: 0, upd: "Next: Argument parsing setup." },
+    { id: "T04.F2", ph: "4. Main/CLI", type: "Func", name: "WorkflowManager", status: "pending", pc: 0, upd: "Next: Module orchestration." }
+];
+
+// Populate Table
+const tbody = document.getElementById('task-body');
+let totalPc = 0;
+tasks.forEach(t => {
+    totalPc += t.pc;
+    const row = `<tr class="p-${t.ph.charAt(0)}">
+        <td>${t.id}</td><td>${t.ph}</td><td>${t.type}</td><td>${t.name}</td>
+        <td><span class="badge ${t.status}">${t.status}</span></td><td>${t.pc}%</td><td>${t.upd}</td>
+    </tr>`;
+    tbody.innerHTML += row;
+});
+document.getElementById('total-pc').innerText = Math.round(totalPc / tasks.length) + "%";
+
+// Initialize Charts (as before, but linked to 'tasks' array counts)
+new Chart(document.getElementById('phaseBarChart'), {
+    type: 'bar', data: { labels: ['Ph 1', 'Ph 2', 'Ph 3', 'Ph 4'], datasets: [{ label: '% Complete', data: [0,0,0,0], backgroundColor: '#3498db' }] }
+});
+new Chart(document.getElementById('typePieChart'), {
+    type: 'doughnut', data: { labels: ['Tests', 'Functions'], datasets: [{ data: [14, 11], backgroundColor: ['#e74c3c', '#2c3e50'] }] }
+});
+</script>
+</body>
+</html>
