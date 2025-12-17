@@ -22,6 +22,7 @@ _CHANGELOG_ENTRIES = [
     "VISUAL FIX: Refined column width calculation and separator line generation in format_results_table to ensure perfect alignment of all pipe characters (|) in the console output.",
     "VISUAL FIX: Corrected f-string padding logic to ensure the separator line uses the exact same calculated total width as the header and data rows, fixing final pipe alignment.",
     "VISUAL FIX: Applied dynamic column width calculation and padding to the Summary Table for improved console alignment and readability."
+    "FEATURE: Added 'test_libraries' to the test suite and updated version audit list."
 ]
 # ------------------------------------------------------------------------------
 import subprocess
@@ -31,16 +32,17 @@ import argparse
 import sys
 import unittest
 import io # Added for CustomTestRunner stream handling
-
+import textwrap # Add this at the top of test_all.py
 # --- Configuration for the Test Runner ---
 TEST_MODULES = [
     "test_database_manager",
     "test_file_scanner",
     "test_metadata_processor",
     "test_deduplicator",
+    "test_libraries"
 ]
 
-# List of files to check for the --get_versions functionality (relative to project root)
+# List of files to check for the --get_versions functionality
 VERSION_CHECK_FILES = [
     "config.py",
     "config_manager.py",
@@ -53,12 +55,15 @@ VERSION_CHECK_FILES = [
     "migrator.py",
     "report_generator.py",
     "version_util.py",
+    "libraries_helper.py",  # <--- ADD THIS LINE
+    "demo_libraries.py",    # <--- ADD THIS LINE
     # Test files
     "test/test_all.py",
     "test/test_database_manager.py",
     "test/test_deduplicator.py",
     "test/test_file_scanner.py",
-    "test/test_metadata_processor.py"
+    "test/test_metadata_processor.py",
+    "test/test_libraries.py" # <--- ADD THIS LINE
 ]
 
 # ==============================================================================
@@ -185,84 +190,68 @@ def format_results_table(all_results, total_tests_run):
         summary_table += f"|{value.rjust(total_value_width)}|\n"
     
     summary = summary_table
-
     # ==========================================================================
-    # --- DETAILED TEST REPORT ---
+    # --- DETAILED TEST REPORT (WITH WRAPPING) ---
     # ==========================================================================
 
-    # Detailed Table Header and Data Preparation
     detailed_data = []
     header_row = ["Test Suite", "Test Name", "Status", "Error/Failure Details"]
-    
-    # 1. Prepare raw data and calculate readable names, while finding max content length
-    # Note: We use max_widths to store the maximum *content* length (excluding surrounding spaces/pipes)
-    max_widths = [len(h) for h in header_row]
-    
-    for module_name, test_name, status, details in test_entries:
-        # 1. Clean up Suite Name (e.g., test_database_manager -> Database Manager)
-        suite_name_readable = module_name.replace('test_', '').title().replace('_', ' ')
-        max_widths[0] = max(max_widths[0], len(suite_name_readable))
+    MAX_DETAILS_WIDTH = 50  # Set your desired maximum width for error messages
 
-        # 2. Clean up Test Name (e.g., test_01_... -> 01: Test Name)
+    # 1. Prepare raw data and calculate readable names
+    max_widths = [len(header_row[0]), len(header_row[1]), len(header_row[2]), MAX_DETAILS_WIDTH]
+
+    for module_name, test_name, status, details in test_entries:
+        # Clean up Suite Name
+        suite_readable = module_name.replace('test_', '').title().replace('_', ' ')
+        max_widths[0] = max(max_widths[0], len(suite_readable))
+
+        # Clean up Test Name
         if test_name.startswith('test_'):
             parts = test_name.split('_', 2)
             if len(parts) >= 3 and parts[1].isdigit():
-                # Formats test_01_hashing_and_initial_insertion to 01: Hashing And Initial Insertion
-                test_number_padded = parts[1].zfill(2)
-                test_name_body = parts[2].replace('_', ' ').title()
-                test_name_readable = f"{test_number_padded}: {test_name_body}"
+                name_readable = f"{parts[1].zfill(2)}: {parts[2].replace('_', ' ').title()}"
             else:
-                test_name_readable = test_name.replace('_', ' ').title()
+                name_readable = test_name.replace('_', ' ').title()
         else:
-             test_name_readable = test_name
-        max_widths[1] = max(max_widths[1], len(test_name_readable))
-
-        details_summary = details.replace('|', '/') if details else ""
-        max_widths[2] = max(max_widths[2], len(status))
-        max_widths[3] = max(max_widths[3], len(details_summary))
+            name_readable = test_name
+        max_widths[1] = max(max_widths[1], len(name_readable))
         
-        detailed_data.append([suite_name_readable, test_name_readable, status, details_summary])
+        # Store clean data for wrapping later
+        detailed_data.append([suite_readable, name_readable, status, details.replace('|', '/')])
 
-    # 2. Calculate final column widths (Total width between pipes: max_content_length + 2 spaces)
-    total_col_width = [w + 2 for w in max_widths] 
-    
-    
+    # 2. Calculate final column widths (Total width between pipes)
+    total_col_widths = [w + 2 for w in max_widths] 
+
     # 3. Format the detailed table string
     detail_table = "\n### Detailed Test Report\n\n"
-    
-    header_line = ""
-    separator_line = ""
-    
-    for i, title in enumerate(header_row):
-        W_T = total_col_width[i] 
+    sep = "".join(f"|{'-' * w}" for w in total_col_widths) + "|\n"
+    header = "".join(f"|{header_row[i].center(total_col_widths[i])}" for i in range(4)) + "|\n"
+
+    detail_table += sep + header + sep
+
+    # 4. Format Data Rows with Wrapping
+    for row in detailed_data:
+        # Wrap the details text into a list of lines
+        wrapped_details = textwrap.wrap(row[3], width=MAX_DETAILS_WIDTH)
+        if not wrapped_details:
+            wrapped_details = [""]
+
+        # The first line of the test entry includes the Suite, Name, and Status
+        line_1 = (f"|{row[0].ljust(total_col_widths[0])}"
+                f"|{row[1].ljust(total_col_widths[1])}"
+                f"|{row[2].center(total_col_widths[2])}"
+                f"| {wrapped_details[0].ljust(MAX_DETAILS_WIDTH)} |\n")
+        detail_table += line_1
         
-        # Header: Content centered within the total width W_T space.
-        header_line += f"|{title.center(W_T)}" 
+        # Subsequent lines for the same test (if the error wrapped) are indented
+        for extra_line in wrapped_details[1:]:
+            detail_table += (f"|{' ' * total_col_widths[0]}"
+                            f"|{' ' * total_col_widths[1]}"
+                            f"|{' ' * total_col_widths[2]}"
+                            f"| {extra_line.ljust(MAX_DETAILS_WIDTH)} |\n")
         
-        # Separator: W_T hyphens to match the width of the content cell.
-        separator_line += f"|{'-' * W_T}" 
-
-    header_line += "|"
-    separator_line += "|" # Final pipe
-
-    detail_table += header_line + "\n"
-    detail_table += separator_line + "\n"
-
-    # Format Data Rows
-    for row_data in detailed_data:
-        row_line = ""
-        
-        # Data rows are padded to the full width W_T.
-        # Col 0 (Suite) and Col 1 (Name) are left-justified.
-        row_line += f"|{row_data[0].ljust(total_col_width[0])}" 
-        row_line += f"|{row_data[1].ljust(total_col_width[1])}"
-        # Col 2 (Status) is center-justified.
-        row_line += f"|{row_data[2].center(total_col_width[2])}"
-        # Col 3 (Details) is left-justified.
-        row_line += f"|{row_data[3].ljust(total_col_width[3])}"
-        row_line += "|"
-        detail_table += row_line + "\n"
-
+    detail_table += sep
     return summary + detail_table
 
 
