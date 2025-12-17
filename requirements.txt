@@ -5,7 +5,7 @@
 
 # Core Utility Dependencies
 # Tqdm is highly recommended for adding progress bars to scanning and processing
-# phases (F02, F07) for a better user experience on large datasets (N01).
+# phases for a better user experience on large datasets.
 tqdm
 
 # Metadata Extraction Dependencies (Functional Requirement F04)
@@ -13,6 +13,5 @@ tqdm
 # and size/dimensions) and fulfilling F04 for image files.
 Pillow
 
-# Future dependencies for specialized metadata extraction (e.g., video metadata,
-# medical images, etc.) will be added here as the 'metadata_processor.py' module
-# is fully implemented.
+# Hachoir is used for extracting metadata from video and binary files (F04).
+hachoir
