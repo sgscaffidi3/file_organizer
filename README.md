@@ -1,12 +1,13 @@
 # ==============================================================================
 # File: README.md
-# Version: 0.3.4
+# Version: 0.3.5
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 # 1. Initial creation of the README file with project description and setup instructions.
 # 2. Updated documentation to reflect the new JSON-based configuration managed by `config_manager.py`.
-# 3. Project name changed from "Personal Media Organizer and Deduplicator" to "File Organizer".
+# 3. Project name changed from \"Personal Media Organizer and Deduplicator\" to \"File Organizer\".
 # 4. Updated version to 0.3.4, synchronized changelog, and clarified dependency and output path details.
+# 5. Updated version to 0.3.5; changes are up-to-date with project version 0.3.26. Added tqdm to dependencies and included information about the test runner.
 # ------------------------------------------------------------------------------
 
 # 🗄️ File Organizer
@@ -38,7 +39,7 @@ The project follows a modular, pipeline-based approach: Scan -> Process Metadata
     ```
 
 3.  **Install Dependencies:**
-    Dependencies include libraries for metadata processing, such as **Pillow** (for image metadata) and potentially **MoviePy/pydicom** (for video and specialized files).
+    Dependencies include libraries for metadata processing and UI feedback, such as **Pillow** (for images), **tqdm** (for progress bars), and potentially **MoviePy** (for video).
     ```bash
     pip install -r requirements.txt 
     ```
@@ -51,11 +52,11 @@ The dynamic settings for the project are managed via a **JSON file**.
     * Find the file named `organizer_config.json` in the root directory.
 
 2.  **Update Paths:**
-    * Under the `"paths"` section, set **`"source_directory"`** to the root of your media collection (e.g., `C:/family/dad/personal_media`).
-    * Adjust **`"output_directory"`** if you want the final organized structure stored elsewhere.
+    * Under the `"paths"` section, set **`"source_directory"`** to the root of your media collection.
+    * Adjust **`"output_directory"`** for the final organized structure.
 
 3.  **Review Preferences:**
-    * Review the `"file_groups"` and `"organization"` settings to match your desired organizational preferences.
+    * Review the `"file_groups"` and `"organization"` settings to match your desired preferences.
 
 ### 4. Final Organized Path Format
 
@@ -65,7 +66,15 @@ The final path is deterministically calculated as:
 
 ### 5. Initialization
 
-Before running the full scan, you must initialize the database schema. You can use the standalone execution command:
+Before running the full scan, you must initialize the database schema:
 
 ```bash
 python database_manager.py --init
+```
+### 6. Running Tests
+To verify the integrity of the project and your environment, run the integrated test suite:
+
+Bash
+
+python test/test_all.py
+This will run all unit tests and generate a Detailed Test Report with a formatted summary table of PASS/FAIL/ERROR statuses for every component.
