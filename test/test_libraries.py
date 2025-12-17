@@ -1,0 +1,119 @@
+# ==============================================================================
+# File: test/test_libraries.py
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 3
+_PATCH_VERSION = 5
+# Version: 0.3.5
+# ------------------------------------------------------------------------------
+# CHANGELOG:
+_CHANGELOG_ENTRIES = [
+    "Initial creation of test_libraries.py to validate external library helpers.",
+    "Implemented test for version reporting (get_library_versions).",
+    "Implemented test for TQDM progress bar wrapper.",
+    "Implemented test for Pillow metadata extraction with a non-existent file path.",
+    "Implemented test for standalone CLI version check (N06)."
+]
+# ------------------------------------------------------------------------------
+import unittest
+import sys
+import subprocess
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+from io import StringIO
+
+# Ensure project root is in path for module imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from libraries_helper import (
+    get_library_versions, 
+    demo_tqdm_progress, 
+    extract_image_metadata,
+    TQDM_AVAILABLE,
+    PIL_AVAILABLE
+)
+
+# Define the path to the file being tested for standalone execution
+LIBRARIES_HELPER_PATH = Path(__file__).resolve().parent.parent / 'libraries_helper.py'
+
+
+class TestLibrariesHelper(unittest.TestCase):
+
+    def test_01_library_version_reporting(self):
+        """Test that get_library_versions returns expected keys and status."""
+        versions = get_library_versions()
+        self.assertIsInstance(versions, dict)
+        self.assertIn('tqdm', versions)
+        self.assertIn('Pillow', versions)
+
+        if TQDM_AVAILABLE:
+            self.assertNotEqual(versions['tqdm'], "Not Installed")
+        else:
+            self.assertEqual(versions['tqdm'], "Not Installed")
+
+        if PIL_AVAILABLE:
+            self.assertNotEqual(versions['Pillow'], "Not Installed")
+        else:
+            self.assertEqual(versions['Pillow'], "Not Installed")
+
+    @unittest.skipUnless(TQDM_AVAILABLE, "tqdm library is not installed.")
+    @patch('sys.stdout', new_callable=StringIO)
+    def test_02_tqdm_progress_bar_execution(self, mock_stdout):
+        """Test that the tqdm wrapper executes without error and prints output."""
+        items = [1, 2, 3]
+        demo_tqdm_progress(items, "Test TQDM")
+        
+        self.assertIn("Test TQDM", mock_stdout.getvalue())
+        self.assertIn("TQDM Demo Complete", mock_stdout.getvalue())
+
+    @patch('sys.stdout', new_callable=StringIO)
+    def test_03_tqdm_missing_library_handling(self, mock_stdout):
+        """Test that the tqdm wrapper handles missing library gracefully."""
+        if not TQDM_AVAILABLE:
+            with patch('libraries_helper.TQDM_AVAILABLE', False):
+                demo_tqdm_progress([1], "Test TQDM Fail")
+                self.assertIn("tqdm is not installed.", mock_stdout.getvalue())
+
+
+    def test_04_extract_metadata_file_not_found(self):
+        """Test that metadata extraction returns an error for a non-existent path."""
+        non_existent_path = Path("/this/path/does/not/exist_12345.jpg")
+        
+        result = extract_image_metadata(non_existent_path)
+        
+        self.assertIn('error', result)
+        self.assertIn('File not found', result['error'])
+
+    @unittest.skipUnless(PIL_AVAILABLE, "Pillow library is not installed.")
+    @patch('libraries_helper.Image.open')
+    def test_05_extract_metadata_io_error_handling(self, mock_open):
+        """Test that metadata extraction handles I/O errors from Pillow."""
+        mock_open.side_effect = IOError("Simulated corrupted file error.")
+        test_path = Path(__file__).resolve()
+        
+        result = extract_image_metadata(test_path)
+        
+        self.assertIn('error', result)
+        self.assertIn('Could not open or process image', result['error'])
+
+    def test_06_standalone_version_check(self):
+        """
+        Test that running libraries_helper.py standalone with -v returns the version string.
+        (Required by N06)
+        """
+        if not LIBRARIES_HELPER_PATH.exists():
+             self.fail(f"Test setup failed: libraries_helper.py not found at {LIBRARIES_HELPER_PATH}")
+             
+        try:
+            result = subprocess.run(
+                [sys.executable, str(LIBRARIES_HELPER_PATH), '-v'],
+                capture_output=True,
+                text=True,
+                check=True # Raise exception on non-zero exit code
+            )
+            
+            # The expected version format is "Version: 0.3.5"
+            self.assertIn("Version:", result.stdout)
+            self.assertIn("0.3.5", result.stdout)
+            
+        except subprocess.CalledProcessError as e:
+            self.fail(f"Subprocess failed with error code {e.returncode}. Stderr: {e.stderr}")
