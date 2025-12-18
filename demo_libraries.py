@@ -2,8 +2,8 @@
 # File: demo_libraries.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 7
-# Version: 0.3.7
+_PATCH_VERSION = 9
+# Version: 0.3.9
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -12,7 +12,8 @@ _CHANGELOG_ENTRIES = [
     "Implemented Pillow metadata extraction demonstration.",
     "FEATURE UPGRADE: Updated to dynamically process all files in 'test_assets'.",
     "UX FIX: Integrated tqdm.write() to display metadata without breaking the progress bar.",
-    "SYNC: Added support for both image and video extraction using project classes."
+    "SYNC: Added support for both image and video extraction using project classes.",
+    "FIX: Added video metadata routing and improved printing with TQDM."
 ]
 # ------------------------------------------------------------------------------
 import sys
@@ -22,8 +23,8 @@ from pathlib import Path
 # Ensure project root is in path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from libraries_helper import get_library_versions
-from metadata_processor import extract_image_metadata, extract_video_metadata
+from libraries_helper import get_library_versions, extract_video_metadata
+from metadata_processor import extract_image_metadata
 
 # Constants
 TEST_ASSETS_DIR = Path("test_assets")
@@ -63,18 +64,18 @@ def run_demo():
         iterator = tqdm(asset_files, desc="Extracting Metadata")
     else:
         iterator = asset_files
-
+    
     for file_path in iterator:
         ext = file_path.suffix.lower()
         metadata = {}
         media_type = "UNKNOWN"
 
         # Determine extraction logic based on file type
-        if ext in ['.jpg', '.jpeg', '.png']:
+        if ext in ['.jpg', '.jpeg', '.png', '.bmp']:
             media_type = "IMAGE"
             if versions.get('Pillow') != "Not Installed":
                 metadata = extract_image_metadata(file_path)
-        elif ext in ['.mp4', '.mov', '.avi']:
+        elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.wmv']:
             media_type = "VIDEO"
             if versions.get('hachoir') != "Not Installed":
                 metadata = extract_video_metadata(file_path)
