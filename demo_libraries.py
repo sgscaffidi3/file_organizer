@@ -39,7 +39,7 @@ def run_demo():
     # 1. Library Version Check
     versions = get_library_versions()
     print("--- Library Versions ---")
-    for lib in ['tqdm', 'Pillow', 'hachoir']:
+    for lib in ['tqdm', 'Pillow', 'hachoir', 'opencv-python']:
         version = versions.get(lib, "Not Installed")
         print(f"  {lib:<10}: {version}")
 
