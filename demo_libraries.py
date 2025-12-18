@@ -13,7 +13,15 @@ _CHANGELOG_ENTRIES = [
     "FEATURE UPGRADE: Updated to dynamically process all files in 'test_assets'.",
     "UX FIX: Integrated tqdm.write() to display metadata without breaking the progress bar.",
     "SYNC: Added support for both image and video extraction using project classes.",
-    "FIX: Added video metadata routing and improved printing with TQDM."
+    "FIX: Added video metadata routing and improved printing with TQDM.",
+    "Initial Hachoir implementation for basic headers.",
+    "Added OpenCV fallback to resolve 0-width/height AVI issues.",
+    "Added version checking and datetime import safety.",
+    "Migrated to pymediainfo for professional stream-level analysis.",
+    "Added specific mapping for DV/DVCPRO camera and tape metadata.",
+    "Implemented Dynamic Mapping using to_data() to support 100% of MediaInfo fields automatically.",
+    "Added --verbose option"
+
 ]
 # ------------------------------------------------------------------------------
 import sys
@@ -23,13 +31,16 @@ from pathlib import Path
 # Ensure project root is in path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from libraries_helper import get_library_versions, extract_video_metadata
+from libraries_helper import get_library_versions, extract_video_metadata, get_video_metadata
 from metadata_processor import extract_image_metadata
 
 # Constants
 TEST_ASSETS_DIR = Path("test_assets")
 
 def run_demo():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--verbose', action='store_true')
+    args, unknown = parser.parse_known_args() # Parse specifically for the demo
     """Runs a demonstration of library utilities against the test_assets directory."""
     
     print("=" * 60)
@@ -78,7 +89,8 @@ def run_demo():
         elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.wmv']:
             media_type = "VIDEO"
             if versions.get('hachoir') != "Not Installed":
-                metadata = extract_video_metadata(file_path)
+                #metadata = extract_video_metadata(file_path)
+                metadata = get_video_metadata(file_path, verbose=args.verbose)
 
         # Prepare formatted output string
         output_lines = [f"\n[{media_type}] {file_path.name}"]
@@ -103,6 +115,7 @@ def run_demo():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Demonstrates external library usage on test_assets.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    parser.add_argument('--verbose', action='store_true', help='Use exhaustive metadata extraction.')
     args = parser.parse_args()
 
     if args.version:

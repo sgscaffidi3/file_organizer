@@ -2,8 +2,8 @@
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 13
-# Version: 0.3.13
+_PATCH_VERSION = 15
+# Version: 0.3.15
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -19,7 +19,10 @@ _CHANGELOG_ENTRIES = [
     "RELIABILITY: Added recursive metadata discovery to find nested stream tags (F04).",
     "BUG FIX: Fixed 'is_list' attribute error by using 'is_group' for recursion.",
     "BUG FIX: Fixed 'Data' object attribute error by using flat iteration for video metadata.",
-    "BUG FIX: Fixed 'Data' object attribute error by using direct item access and exportPlaintext."
+    "BUG FIX: Fixed 'Data' object attribute error by using direct item access and exportPlaintext.",
+    "EVOLUTION: Integrated MediaInfo for professional-grade and dynamic metadata extraction.",
+    "CLI: Added --verbose argument to toggle between standard and exhaustive MediaInfo extraction.",
+    "SYNC: Refined internal logic to support external calls for verbose vs standard metadata."
 ]
 # ------------------------------------------------------------------------------
 from pathlib import Path
@@ -93,19 +96,73 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Pillow error: {e}"}
     return metadata
+
+def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
+    """
+    Dynamic Metadata Scraper.
+    Automatically captures 100% of available MediaInfo attributes.
+    """
+    results = {}
+    
+    # 1. OS-Level Stats
+    try:
+        stats = file_path.stat()
+        results["OS_File_Size"] = f"{stats.st_size / (1024**3):.2f} GiB"
+        results["OS_Date_Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+        results["OS_Date_Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        results["OS_Error"] = str(e)
+
+    try:
+        media_info = MediaInfo.parse(str(file_path))
+        
+        for track in media_info.tracks:
+            # Create a clean prefix for the track type
+            track_type = track.track_type
+            if track_type in ["Audio", "Text"]:
+                prefix = f"{track_type}_{track.track_id or '0'}"
+            else:
+                prefix = track_type
+            
+            # Convert track object to a dictionary of all available data
+            track_dict = track.to_data()
+            
+            for key, value in track_dict.items():
+                if value is None or key in ['track_type', 'track_id']:
+                    continue
+                
+                other_key = f"other_{key}"
+                if other_key in track_dict and track_dict[other_key]:
+                    display_value = track_dict[other_key][0]
+                else:
+                    display_value = value
+
+                clean_key = f"{prefix}_{key.replace('_', ' ').title().replace(' ', '_')}"
+                
+                if clean_key not in results:
+                    results[clean_key] = display_value
+
+    except Exception as e:
+        results["MediaInfo_Error"] = str(e)
+
+    return results
+
 def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
+    """Standard MediaInfo extraction with hardcoded keys for consistent UI."""
     results = {}
     
     # OS Level Stats
-    stats = file_path.stat()
-    results["File Size"] = f"{stats.st_size / (1024**3):.2f} GiB"
-    results["Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
-    results["Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        stats = file_path.stat()
+        results["File Size"] = f"{stats.st_size / (1024**3):.2f} GiB"
+        results["Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+        results["Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        results["OS_Error"] = str(e)
 
     try:
         media_info = MediaInfo.parse(str(file_path))
         for track in media_info.tracks:
-            # --- GENERAL ---
             if track.track_type == "General":
                 results["Format"] = track.format
                 results["Format_Info"] = track.format_info
@@ -117,7 +174,6 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
                 results["Frame_Rate"] = f"{track.frame_rate} FPS"
                 results["Recorded_Date"] = track.recorded_date
 
-            # --- VIDEO ---
             elif track.track_type == "Video":
                 results["Video_ID"] = track.track_id
                 results["Video_Format"] = track.format
@@ -142,7 +198,6 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
                 results["Stream_Size"] = track.other_stream_size[0] if track.other_stream_size else "N/A"
                 results["Encoding_Settings"] = track.encoding_settings
 
-            # --- AUDIO ---
             elif track.track_type == "Audio":
                 t_id = f"Audio_{track.track_id or '1'}"
                 results[f"{t_id}_Format"] = track.format
@@ -160,59 +215,21 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
         results["MediaInfo_Error"] = str(e)
 
     return results
-'''
-def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
-    """Combines Hachoir and OpenCV to ensure resolution is never missing."""
-    results = {}
-    
-    # 1. Use OpenCV for the 'Physical' data (Width, Height, FPS)
-    if OPENCV_AVAILABLE:
-        try:
-            cap = cv2.VideoCapture(str(file_path))
-            if cap.isOpened():
-                results["Width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                results["Height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                if fps > 0:
-                    results["FPS"] = round(fps, 2)
-                
-                # --- NEW: Codec Extraction ---
-                fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-                # Convert the integer to a 4-character string (e.g., 'XVID')
-                fourcc_str = "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-                results["Codec"] = fourcc_str.strip()
-                
-                # Get total frame count (useful for deep analysis)
-                results["Frame Count"] = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                
-                cap.release()
-        except Exception as e:
-            results["OpenCV_Error"] = str(e)
 
-    # 2. Use Hachoir for the 'Header' data (Duration, Bitrate, MIME)
-    try:
-        parser = createParser(str(file_path))
-        if parser:
-            with parser:
-                meta = extractMetadata(parser)
-                if meta:
-                    for line in meta.exportPlaintext():
-                        if ":" in line:
-                            k, v = line.lstrip("- ").split(":", 1)
-                            key, val = k.strip(), v.strip()
-                            # Avoid overwriting the accurate CV2 data
-                            if key not in ["Image width", "Image height", "Frame rate"]:
-                                results[key] = val
-    except Exception as e:
-        results["Hachoir_Status"] = f"Header read failed: {e}"
-
-    return results
-    '''
+def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
+    """
+    Unified entry point for metadata extraction.
+    Toggles between standard (clean) and verbose (exhaustive) output.
+    """
+    if verbose:
+        return extract_video_metadata_verbose(file_path)
+    return extract_video_metadata(file_path)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Library Helper Module for File Organizer.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    parser.add_argument('--verbose', action='store_true', help='Use exhaustive metadata extraction.')
+    parser.add_argument('file', nargs='?', help='Path to a video file for metadata extraction demo.')
     args = parser.parse_args()
 
     if args.version:
@@ -225,3 +242,14 @@ if __name__ == '__main__':
         except ImportError: sys.exit(1)
             
     print("Library Helper Status:", get_library_versions())
+
+    if args.file:
+        file_path = Path(args.file)
+        if file_path.exists():
+            print(f"\n--- Metadata Demo for: {file_path.name} ---")
+            metadata = get_video_metadata(file_path, verbose=args.verbose)
+            
+            for key, value in sorted(metadata.items()):
+                print(f"{key:25}: {value}")
+        else:
+            print(f"\nError: File not found: {args.file}")
