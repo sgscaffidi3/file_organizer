@@ -18,3 +18,5 @@ hachoir
 
 # Bitstream Extraction (for stubborn AVI/MP4 headers)
 opencv-python>=4.9.0.80
+
+pymediainfo>=6.1.0
