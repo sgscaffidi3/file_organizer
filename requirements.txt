@@ -15,3 +15,6 @@ Pillow
 
 # Hachoir is used for extracting metadata from video and binary files (F04).
 hachoir
+
+# Bitstream Extraction (for stubborn AVI/MP4 headers)
+opencv-python>=4.9.0.80
