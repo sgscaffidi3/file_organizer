@@ -52,11 +52,18 @@ try:
 except ImportError:
     HACHOIR_AVAILABLE = False
 
+try:
+    import cv2
+    OPENCV_AVAILABLE = True
+    OPENCV_VERSION = cv2.__version__
+except ImportError:
+    OPENCV_AVAILABLE = False
+    OPENCV_VERSION = "Not Installed"
 
 def get_library_versions():
     """Returns a dictionary of relevant library versions for the project."""
     versions = {}
-    for lib in ['tqdm', 'Pillow', 'hachoir']:
+    for lib in ['tqdm', 'Pillow', 'hachoir', 'opencv-python']:
         try:
             versions[lib] = importlib.metadata.version(lib)
         except importlib.metadata.PackageNotFoundError:
@@ -81,49 +88,43 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Pillow error: {e}"}
     return metadata
-
 def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
-    """Surgically probes Stream Format (strf) chunks for hidden resolution."""
-    if not HACHOIR_AVAILABLE:
-        return {"error": "Hachoir not found."}
-
+    """Combines Hachoir and OpenCV to ensure resolution is never missing."""
     results = {}
+    
+    # 1. Use OpenCV for the 'Physical' data (Width, Height, FPS)
+    if OPENCV_AVAILABLE:
+        try:
+            cap = cv2.VideoCapture(str(file_path))
+            if cap.isOpened():
+                results["Width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                results["Height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                # Only add FPS if it's a valid number
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if fps > 0:
+                    results["FPS"] = round(fps, 2)
+                cap.release()
+        except Exception as e:
+            results["OpenCV_Status"] = f"Failed to read bitstream: {e}"
+    else:
+        results["OpenCV_Status"] = "Library not found. Run 'pip install opencv-python'"
+
+    # 2. Use Hachoir for the 'Header' data (Duration, Bitrate, MIME)
     try:
-        from hachoir.parser import createParser
-        from hachoir.metadata import extractMetadata
-        
         parser = createParser(str(file_path))
-        if not parser: return {"error": "Parser failed."}
-
-        with parser:
-            # 1. Standard Metadata (The 'Common' stuff)
-            meta = extractMetadata(parser)
-            if meta:
-                for line in meta.exportPlaintext():
-                    if ":" in line:
-                        k, v = line.lstrip("- ").split(":", 1)
-                        results[k.strip()] = v.strip()
-
-            # 2. SURGICAL BITMAP PROBE: 
-            # We look specifically for 'width' and 'height' inside the stream chunks.
-            # This bypasses the empty main header.
-            def find_resolution(obj):
-                for field in obj:
-                    name = field.name.lower()
-                    # Check for 'width' or 'height' and ensure it's not the 0 value from 'avih'
-                    if ('width' in name or 'height' in name) and hasattr(field, 'value'):
-                        val = field.value
-                        if isinstance(val, int) and val > 0:
-                            results[f"Stream_{field.name}"] = str(field.display)
-                    
-                    # Only dive into header chunks (avih, strh, strf), ignore data chunks (movi)
-                    if field.is_field_set and name in ['header', 'list', 'strl', 'strf', 'avih']:
-                        find_resolution(field)
-
-            find_resolution(parser)
-
+        if parser:
+            with parser:
+                meta = extractMetadata(parser)
+                if meta:
+                    for line in meta.exportPlaintext():
+                        if ":" in line:
+                            k, v = line.lstrip("- ").split(":", 1)
+                            key, val = k.strip(), v.strip()
+                            # Avoid overwriting the accurate CV2 data
+                            if key not in ["Image width", "Image height", "Frame rate"]:
+                                results[key] = val
     except Exception as e:
-        results["Internal_Note"] = f"Deep probe limited: {str(e)}"
+        results["Hachoir_Status"] = f"Header read failed: {e}"
 
     return results
 
