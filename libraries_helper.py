@@ -93,57 +93,67 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Pillow error: {e}"}
     return metadata
-
 def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
-    """
-    The Ultimate Unified Metadata Scraper.
-    Combines OS stats, core media info, and deep DV/DVCPRO tape metadata.
-    """
     results = {}
     
-    # 1. OS-Level Stats (The "Container" on the disk)
-    try:
-        stats = file_path.stat()
-        results["File Size"] = f"{stats.st_size / (1024**3):.2f} GiB"
-        results["Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
-        results["Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-    except Exception as e:
-        results["OS_Error"] = str(e)
+    # OS Level Stats
+    stats = file_path.stat()
+    results["File Size"] = f"{stats.st_size / (1024**3):.2f} GiB"
+    results["Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+    results["Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
 
     try:
         media_info = MediaInfo.parse(str(file_path))
-        
         for track in media_info.tracks:
-            # --- GENERAL SECTION (The File Identity) ---
+            # --- GENERAL ---
             if track.track_type == "General":
-                results["Format"] = f"{track.format} ({track.commercial_name})"
+                results["Format"] = track.format
+                results["Format_Info"] = track.format_info
+                results["Commercial_Name"] = track.commercial_name
+                results["Format_Profile"] = track.format_profile
                 results["Duration"] = track.other_duration[0] if track.other_duration else "N/A"
-                results["Recorded Date"] = track.recorded_date
-                results["Overall Bitrate"] = f"{float(track.overall_bit_rate)/1000000:.1f} Mb/s" if track.overall_bit_rate else "N/A"
-                if track.other_time_code_first_frame:
-                    results["Tape_Timecode"] = track.other_time_code_first_frame[0]
+                results["Overall_Bit_Rate_Mode"] = track.overall_bit_rate_mode
+                results["Overall_Bit_Rate"] = f"{float(track.overall_bit_rate)/1000000:.1f} Mb/s" if track.overall_bit_rate else "N/A"
+                results["Frame_Rate"] = f"{track.frame_rate} FPS"
+                results["Recorded_Date"] = track.recorded_date
 
-            # --- VIDEO SECTION (The Visuals) ---
+            # --- VIDEO ---
             elif track.track_type == "Video":
-                results["Resolution"] = f"{track.width}x{track.height}"
-                results["Frame Rate"] = f"{track.frame_rate} FPS"
-                results["Scan Type"] = f"{track.scan_type} ({track.scan_order})"
-                results["Color_Space"] = f"{track.color_space} {track.chroma_subsampling}"
+                results["Video_ID"] = track.track_id
+                results["Video_Format"] = track.format
+                results["Video_Commercial_Name"] = track.commercial_name
+                results["Video_Bit_Rate_Mode"] = track.bit_rate_mode
+                results["Video_Bit_Rate"] = f"{float(track.bit_rate)/1000000:.1f} Mb/s" if track.bit_rate else "N/A"
+                results["Width"] = f"{track.width} pixels"
+                results["Height"] = f"{track.height} pixels"
+                results["Display_Aspect_Ratio"] = track.display_aspect_ratio
+                results["Video_Frame_Rate_Mode"] = track.frame_rate_mode
+                results["Video_Frame_Rate"] = f"{track.frame_rate} ({track.frame_rate_num}/{track.frame_rate_den}) FPS"
                 results["Standard"] = track.standard
-                results["Video_Codec"] = track.format
-                results["Video_Stream_Size"] = track.other_stream_size[0] if track.other_stream_size else "N/A"
-                
-                # Restore the Camera/Lens settings found in DV headers
-                if track.encoding_settings:
-                    results["Camera_Settings"] = track.encoding_settings
+                results["Color_Space"] = track.color_space
+                results["Chroma_Subsampling"] = track.chroma_subsampling
+                results["Bit_Depth"] = f"{track.bit_depth} bits"
+                results["Scan_Type"] = track.scan_type
+                results["Scan_Order"] = track.scan_order
+                results["Compression_Mode"] = track.compression_mode
+                results["Bits_Pixel_Frame"] = track.bits__pixel_frame
+                results["Time_Code_First_Frame"] = track.other_time_code_first_frame[0] if track.other_time_code_first_frame else "N/A"
+                results["Time_Code_Source"] = track.time_code_source
+                results["Stream_Size"] = track.other_stream_size[0] if track.other_stream_size else "N/A"
+                results["Encoding_Settings"] = track.encoding_settings
 
-            # --- AUDIO SECTION (The Sound) ---
+            # --- AUDIO ---
             elif track.track_type == "Audio":
                 t_id = f"Audio_{track.track_id or '1'}"
-                results[f"{t_id}_Format"] = f"{track.format} ({track.format_settings})"
+                results[f"{t_id}_Format"] = track.format
+                results[f"{t_id}_Format_Settings"] = track.format_settings
+                results[f"{t_id}_Muxing_Mode"] = track.muxing_mode
+                results[f"{t_id}_Muxing_More"] = track.muxing_mode_more_info
+                results[f"{t_id}_Bit_Rate_Mode"] = track.bit_rate_mode
+                results[f"{t_id}_Bit_Rate"] = f"{int(track.bit_rate)/1000:,.0f} kb/s" if track.bit_rate else "N/A"
                 results[f"{t_id}_Channels"] = f"{track.channel_s} channels"
-                results[f"{t_id}_Sampling"] = f"{float(track.sampling_rate)/1000} kHz"
-                results[f"{t_id}_BitDepth"] = f"{track.bit_depth} bits"
+                results[f"{t_id}_Sampling_Rate"] = f"{float(track.sampling_rate)/1000} kHz"
+                results[f"{t_id}_Bit_Depth"] = f"{track.bit_depth} bits"
                 results[f"{t_id}_Stream_Size"] = track.other_stream_size[0] if track.other_stream_size else "N/A"
 
     except Exception as e:
