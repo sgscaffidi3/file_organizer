@@ -24,12 +24,17 @@ _CHANGELOG_ENTRIES = [
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
-import time
+import time, datetime
 import sys
 import argparse
 import importlib.metadata
 
 # Attempt to import external dependencies
+try:
+    from pymediainfo import MediaInfo
+    MEDIINFO_AVAILABLE = True
+except ImportError:
+    MEDIINFO_AVAILABLE = False
 try:
     from PIL import Image
     PIL_AVAILABLE = True
@@ -63,7 +68,7 @@ except ImportError:
 def get_library_versions():
     """Returns a dictionary of relevant library versions for the project."""
     versions = {}
-    for lib in ['tqdm', 'Pillow', 'hachoir', 'opencv-python']:
+    for lib in ['tqdm', 'Pillow', 'hachoir', 'opencv-python', 'pymediainfo']:
         try:
             versions[lib] = importlib.metadata.version(lib)
         except importlib.metadata.PackageNotFoundError:
@@ -88,6 +93,53 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Pillow error: {e}"}
     return metadata
+
+def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
+    results = {}
+    
+    # --- 1. File System Data (OS Level) ---
+    stats = file_path.stat()
+    results["File Size"] = f"{stats.st_size / (1024*1024):.2f} MB"
+    results["Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+    results["Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+
+    # --- 2. Deep Media Analysis ---
+    try:
+        media_info = MediaInfo.parse(str(file_path))
+        
+        for track in media_info.tracks:
+            if track.track_type == "Video":
+                results["Video_Codec"] = track.format
+                results["Width"] = track.width
+                results["Height"] = track.height
+                results["FPS"] = track.frame_rate
+                results["Video_Bitrate"] = f"{int(track.bit_rate)/1000} kbps" if track.bit_rate else "N/A"
+                
+            elif track.track_type == "Audio":
+                t_id = f"Audio_{track.track_id or '1'}"
+                results[f"{t_id}_Codec"] = track.format
+                results[f"{t_id}_Channels"] = track.channel_s
+                results[f"{t_id}_SampleRate"] = f"{track.sampling_rate} Hz"
+                results[f"{t_id}_Language"] = track.language or "Unknown"
+                results[f"{t_id}_Bitrate"] = f"{int(track.bit_rate)/1000} kbps" if track.bit_rate else "N/A"
+
+            elif track.track_type == "Text": # Subtitles
+                s_id = f"Subtitle_{track.track_id or '1'}"
+                results[f"{s_id}_Format"] = track.format
+                results[f"{s_id}_Language"] = track.language or "Unknown"
+                results[f"{s_id}_Default"] = track.default
+
+        # Overall Duration
+        if media_info.general_tracks:
+            dur_ms = media_info.general_tracks[0].duration
+            if dur_ms:
+                results["Duration"] = str(datetime.timedelta(milliseconds=float(dur_ms)))
+
+    except Exception as e:
+        results["Analysis_Error"] = str(e)
+
+    return results
+'''
 def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
     """Combines Hachoir and OpenCV to ensure resolution is never missing."""
     results = {}
@@ -99,15 +151,23 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
             if cap.isOpened():
                 results["Width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 results["Height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                # Only add FPS if it's a valid number
+                
                 fps = cap.get(cv2.CAP_PROP_FPS)
                 if fps > 0:
                     results["FPS"] = round(fps, 2)
+                
+                # --- NEW: Codec Extraction ---
+                fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+                # Convert the integer to a 4-character string (e.g., 'XVID')
+                fourcc_str = "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+                results["Codec"] = fourcc_str.strip()
+                
+                # Get total frame count (useful for deep analysis)
+                results["Frame Count"] = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                
                 cap.release()
         except Exception as e:
-            results["OpenCV_Status"] = f"Failed to read bitstream: {e}"
-    else:
-        results["OpenCV_Status"] = "Library not found. Run 'pip install opencv-python'"
+            results["OpenCV_Error"] = str(e)
 
     # 2. Use Hachoir for the 'Header' data (Duration, Bitrate, MIME)
     try:
@@ -127,6 +187,7 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
         results["Hachoir_Status"] = f"Header read failed: {e}"
 
     return results
+    '''
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Library Helper Module for File Organizer.")
