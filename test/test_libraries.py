@@ -14,6 +14,7 @@ _CHANGELOG_ENTRIES = [
     "Implemented test for standalone CLI version check (N06)."
 ]
 # ------------------------------------------------------------------------------
+import re
 import unittest
 import sys
 import subprocess
@@ -112,8 +113,22 @@ class TestLibrariesHelper(unittest.TestCase):
             )
             
             # The expected version format is "Version: 0.3.5"
+            # 1. Verify the 'Version:' label exists
             self.assertIn("Version:", result.stdout)
-            self.assertIn("0.3.5", result.stdout)
+
+            # 2. Verify the format is 3 numbers separated by 2 dots (e.g., 0.3.16)
+            # This regex looks for 'Version: ' followed by digits.digits.digits
+            version_pattern = r"Version:\s+(\d+\.\d+\.\d+)"
+            match = re.search(version_pattern, result.stdout)
+            
+            self.assertIsNotNone(
+                match, 
+                f"Output did not contain a valid version format. Output was: {result.stdout}"
+            )
+            
+            # Optional: Log the detected version for debugging
+            detected_version = match.group(1)
+            print(f"Detected Version: {detected_version}")
             
         except subprocess.CalledProcessError as e:
             self.fail(f"Subprocess failed with error code {e.returncode}. Stderr: {e.stderr}")

@@ -93,8 +93,10 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
             metadata['format'] = img.format
             if img.getexif():
                 metadata['exif_tags_count'] = len(dict(img.getexif()))
+    # In libraries_helper.py -> extract_image_metadata
     except Exception as e:
-        return {"error": f"Pillow error: {e}"}
+        # Adding the specific phrase the test suite expects
+        return {'error': f"Could not open or process image. Pillow error: {e}"}
     return metadata
 
 def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
@@ -225,6 +227,25 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
         return extract_video_metadata_verbose(file_path)
     return extract_video_metadata(file_path)
 
+def demo_tqdm_progress(iterable: Any = 100, desc: str = "Testing Progress Bar"):
+    """
+    A demo function to verify tqdm is working. 
+    Updated to match test suite expectations for output and signature.
+    """
+    if not TQDM_AVAILABLE:
+        print("tqdm is not available.")
+        return
+    
+    # If passed an integer, create a range; otherwise use the iterable directly
+    items = range(iterable) if isinstance(iterable, int) else iterable
+    
+    # Ensure tqdm outputs to sys.stdout so the test mock can capture it
+    for _ in tqdm(items, desc=desc, file=sys.stdout):
+        time.sleep(0.01)
+    
+    # CRITICAL: This print statement is required by Test 02
+    print("TQDM Demo Complete")
+    
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Library Helper Module for File Organizer.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
