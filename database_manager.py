@@ -92,28 +92,31 @@ class DatabaseManager:
                 self.conn.rollback()
             raise e
             
-    def create_schema(self):
+def create_schema(self):
         """Creates the necessary tables if they don't exist."""
         if not self.conn:
-            self.connect() # Ensure connection is open to create schema
+            self.connect()
 
-        # MediaContent: Unique file content (hashes) and associated rich metadata
+        # MediaContent: Updated with hybrid metadata support
         content_table_sql = """
         CREATE TABLE IF NOT EXISTS MediaContent (
             content_hash TEXT PRIMARY KEY,
             size INTEGER NOT NULL,
             file_type_group TEXT NOT NULL,
             
-            -- Rich Metadata (extracted by MetadataProcessor)
-            date_best TEXT, -- Best estimated date (EXIF, file system, etc.)
+            -- Core Metadata Columns
+            date_best TEXT, 
             width INTEGER,
             height INTEGER,
             duration REAL,
             bitrate INTEGER,
-            title TEXT
+            title TEXT,
+            video_codec TEXT, -- New: Explicit column for codec
+            
+            -- Hybrid "Backpack" Column
+            extended_metadata TEXT -- New: Stores exhaustive JSON blob
         );
         """
-        
         # FilePathInstances: List of all file locations. 
         instance_table_sql = """
         CREATE TABLE IF NOT EXISTS FilePathInstances (
