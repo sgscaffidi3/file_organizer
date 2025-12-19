@@ -91,61 +91,61 @@ class DatabaseManager:
             if self.conn and not query.strip().upper().startswith('SELECT'):
                 self.conn.rollback()
             raise e
-            
-def create_schema(self):
-        """Creates the necessary tables if they don't exist."""
-        if not self.conn:
-            self.connect()
+    
+    def create_schema(self):
+            """Creates the necessary tables if they don't exist."""
+            if not self.conn:
+                self.connect()
 
-        # MediaContent: Updated with hybrid metadata support
-        content_table_sql = """
-        CREATE TABLE IF NOT EXISTS MediaContent (
-            content_hash TEXT PRIMARY KEY,
-            size INTEGER NOT NULL,
-            file_type_group TEXT NOT NULL,
-            
-            -- Core Metadata Columns
-            date_best TEXT, 
-            width INTEGER,
-            height INTEGER,
-            duration REAL,
-            bitrate INTEGER,
-            title TEXT,
-            video_codec TEXT, -- New: Explicit column for codec
-            
-            -- Hybrid "Backpack" Column
-            extended_metadata TEXT -- New: Stores exhaustive JSON blob
-        );
-        """
-        # FilePathInstances: List of all file locations. 
-        instance_table_sql = """
-        CREATE TABLE IF NOT EXISTS FilePathInstances (
-            file_id INTEGER PRIMARY KEY,
-            content_hash TEXT NOT NULL,
-            path TEXT UNIQUE NOT NULL, 
-            original_full_path TEXT NOT NULL,
-            original_relative_path TEXT NOT NULL,
-            
-            -- Metadata derived from file system:
-            date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
-            date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Add date_modified
-            
-            -- Deduplication/Organization fields:
-            is_primary BOOLEAN DEFAULT 0,
-            new_path_id INTEGER,
+            # MediaContent: Updated with hybrid metadata support
+            content_table_sql = """
+            CREATE TABLE IF NOT EXISTS MediaContent (
+                content_hash TEXT PRIMARY KEY,
+                size INTEGER NOT NULL,
+                file_type_group TEXT NOT NULL,
+                
+                -- Core Metadata Columns
+                date_best TEXT, 
+                width INTEGER,
+                height INTEGER,
+                duration REAL,
+                bitrate INTEGER,
+                title TEXT,
+                video_codec TEXT, -- New: Explicit column for codec
+                
+                -- Hybrid "Backpack" Column
+                extended_metadata TEXT -- New: Stores exhaustive JSON blob
+            );
+            """
+            # FilePathInstances: List of all file locations. 
+            instance_table_sql = """
+            CREATE TABLE IF NOT EXISTS FilePathInstances (
+                file_id INTEGER PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                path TEXT UNIQUE NOT NULL, 
+                original_full_path TEXT NOT NULL,
+                original_relative_path TEXT NOT NULL,
+                
+                -- Metadata derived from file system:
+                date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
+                date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Add date_modified
+                
+                -- Deduplication/Organization fields:
+                is_primary BOOLEAN DEFAULT 0,
+                new_path_id INTEGER,
 
-            FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) ON DELETE CASCADE
-        );
-        """
-        
-        try:
-            self.conn.execute(content_table_sql)
-            self.conn.execute(instance_table_sql)
-            self.conn.commit()
-        except sqlite3.Error as e:
-            self.conn.rollback()
-            print(f"Error creating schema: {e}")
-            raise e
+                FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) ON DELETE CASCADE
+            );
+            """
+            
+            try:
+                self.conn.execute(content_table_sql)
+                self.conn.execute(instance_table_sql)
+                self.conn.commit()
+            except sqlite3.Error as e:
+                self.conn.rollback()
+                print(f"Error creating schema: {e}")
+                raise e
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
