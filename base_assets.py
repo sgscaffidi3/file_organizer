@@ -11,10 +11,11 @@ _CHANGELOG_ENTRIES = [
     "Initial creation of base_assets module with class inheritance.",
     "Implemented GenericFileAsset, AudioAsset, DocumentAsset, and ImageAsset.",
     "Standardized JSON 'backpack' across all asset types.",
-    "Added project-standard versioning and CLI --version support."
+    "Added project-standard versioning and CLI --version support.",
+    "Added _clean_numeric helper for ImageAsset dimension scrubbing."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.1.4
+# Version: 0.1.5
 
 class GenericFileAsset:
     """Base model for all files; handles file identity and the JSON backpack."""
@@ -46,6 +47,7 @@ class ImageAsset(GenericFileAsset):
         self.camera = meta.get('Camera_Model') or meta.get('Make', "Unknown")
 
     def _clean_numeric(self, value: Any) -> int:
+        """Strip units (like 'pixels') and return a clean integer."""
         try:
             return int(''.join(filter(str.isdigit, str(value))))
         except (ValueError, TypeError):
