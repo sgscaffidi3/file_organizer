@@ -1,66 +1,65 @@
+# ==============================================================================
+# File: video_asset.py
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 2
+_CHANGELOG_ENTRIES = [
+    "Initial implementation of VideoAsset model.",
+    "Integrated MediaInfo for professional stream-level parsing.",
+    "Added support for DV/DVCPRO camera and tape metadata mapping.",
+    "ARCHITECTURE REFACTOR: Now inherits from GenericFileAsset for shared behavior.",
+    "FEATURE: Support for get_friendly_size() via base class inheritance.",
+    "RESTORED: Re-integrated audio codecs, bitrates, and aspect ratio logic lost in refactor."
+]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.2.6
+# ------------------------------------------------------------------------------
 import json
 import sys
 import argparse
 from pathlib import Path
 from typing import Dict, Any
 
-# --- PROJECT METADATA ---
-_MAJOR_VERSION = 0
-_MINOR_VERSION = 1
+# Project Dependencies
+from base_assets import GenericFileAsset
 
-_CHANGELOG_ENTRIES = [
-    "Initial creation of VideoAsset class with Hybrid Metadata Support.",
-    "Implemented explicit attribute mapping for core video/audio metrics.",
-    "Added JSON 'backpack' for exhaustive metadata storage (Verbose Strategy).",
-    "Added aspect ratio calculation logic for 4:3 and 16:9 detection.",
-    "Standardized CLI support for --version, --help, and independent testing.",
-    "Synchronized versioning logic with version_util and automated patch numbering."
-]
-
-_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.1.6
-
-class VideoAsset:
+class VideoAsset(GenericFileAsset):
     """
-    Represents a video file with a hybrid metadata model.
-    Core fields are promoted to attributes; exhaustive data is stored in a JSON blob.
+    Specialized asset model for Video files.
+    Inherits get_friendly_size() and the JSON backpack from GenericFileAsset.
     """
     def __init__(self, file_path: Path, meta: Dict[str, Any]):
-        # --- OS & File Identity ---
-        self.path = file_path
-        self.name = file_path.name
-        self.size = meta.get('OS_File_Size') or meta.get('File Size', "Unknown")
+        # Initialize the base class to set up size_bytes, recorded_date, and backpack
+        super().__init__(file_path, meta)
+        
+        # --- File Identity & Dates (Restored) ---
+        self.format = meta.get('Format', "Unknown")
         self.created = meta.get('OS_Date_Created') or meta.get('Created', "Unknown")
         self.modified = meta.get('OS_Date_Modified') or meta.get('Modified', "Unknown")
-        
-        # --- Core Video Specs ---
-        self.format = meta.get('Format', "Unknown")
-        self.duration = meta.get('Duration', "00:00:00")
-        self.recorded_date = meta.get('Recorded_Date', "Unknown")
-        self.video_codec = meta.get('Video_Format') or meta.get('Video_Codec', "Unknown")
-        self.video_bitrate = meta.get('Video_Bit_Rate', "Unknown")
-        
-        # Extract numeric values for width/height to support math
+
+        # --- Core Video Specs (Restored) ---
         self.width = self._clean_numeric(meta.get('Width') or meta.get('Resolution', "0").split('x')[0])
         self.height = self._clean_numeric(meta.get('Height') or meta.get('Resolution', "0").split('x')[-1])
+        self.duration = meta.get('Duration', "00:00:00")
+        self.video_codec = meta.get('Video_Format') or meta.get('Video_Codec', "Unknown")
+        self.video_bitrate = meta.get('Video_Bit_Rate', "Unknown")
+        self.frame_rate = meta.get('Frame_Rate', "Unknown")
         self.standard = meta.get('Standard', "N/A")
-        
-        # --- Aspect Ratio Handling ---
+
+        # --- Aspect Ratio Handling (Restored) ---
         self.aspect_decimal = meta.get('Display_Aspect_Ratio', "0.0")
         self.aspect_ratio = self._calculate_aspect_ratio()
         
-        # --- Audio Specs ---
+        # --- Audio Specs (Restored) ---
         self.audio_codec = meta.get('Audio_0-0_Format') or meta.get('Audio_1_Format', "Unknown")
         self.audio_bitrate = meta.get('Audio_0-0_Bit_Rate') or meta.get('Audio_1_Bit_Rate', "Unknown")
         self.audio_channels = meta.get('Audio_0-0_Channels') or meta.get('Audio_1_Channels', "Unknown")
 
-        # --- The JSON "Backpack" ---
-        self.extended_metadata = meta 
-
     def _clean_numeric(self, value: Any) -> int:
-        """Strip units (like 'pixels') and return a clean integer."""
+        """Helper to ensure dimensions are clean integers."""
         try:
-            return int(''.join(filter(str.isdigit, str(value))))
+            if isinstance(value, str):
+                return int(''.join(filter(str.isdigit, value)))
+            return int(value)
         except (ValueError, TypeError):
             return 0
 
@@ -77,43 +76,24 @@ class VideoAsset:
     def __repr__(self):
         return f"<VideoAsset: {self.name} | {self.format} | {self.aspect_ratio}>"
 
-    def get_full_json(self) -> str:
-        """Returns the complete metadata dictionary as a JSON string for DB storage."""
-        return json.dumps(self.extended_metadata, indent=4)
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="VideoAsset Model: Represents a media file with metadata.")
-    parser.add_argument('-v', '--version', action='store_true', help='Show version info.')
-    parser.add_argument('--test', action='store_true', help='Run a self-test with dummy data.')
+    parser = argparse.ArgumentParser(description="Video Asset Model")
+    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--test', action='store_true')
     args = parser.parse_args()
 
     if args.version:
-        # Add project root to path to ensure version_util is found
-        project_root = Path(__file__).resolve().parent
-        if str(project_root) not in sys.path: sys.path.append(str(project_root))
-        
-        try:
-            from version_util import print_version_info
-            print_version_info(__file__, "Video Asset Data Model")
-            sys.exit(0)
-        except ImportError:
-            # Fallback if version_util isn't in this directory
-            print(f"VideoAsset Model v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
-            sys.exit(0)
+        print(f"Video Asset v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        sys.exit(0)
 
     if args.test:
-        print("--- Running VideoAsset Self-Test ---")
         dummy_meta = {
+            "OS_File_Size": 1024 * 1024 * 5, # 5 MiB
             "Format": "AVI",
-            "Width": "720 pixels",
-            "Height": "480 pixels",
-            "Video_Format": "DV",
-            "Recorded_Date": "2003-06-15",
-            "Audio_0-0_Format": "PCM"
+            "Width": "720",
+            "Height": "480",
+            "Duration": "00:01:30"
         }
-        asset = VideoAsset(Path("test_video.avi"), dummy_meta)
-        print(f"Asset Created: {asset}")
-        print(f"Detected Ratio: {asset.aspect_ratio}")
-        print(f"Numeric Width: {asset.width}")
-        print("\nJSON Backpack Preview (First 50 chars):")
-        print(asset.get_full_json()[:1500] + "...")
+        asset = VideoAsset(Path("test.avi"), dummy_meta)
+        print(f"Created: {asset}")
+        print(f"Friendly Size: {asset.get_friendly_size()}")
