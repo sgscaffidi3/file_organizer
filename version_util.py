@@ -36,6 +36,8 @@ VERSION_CHECK_FILES = [
     "report_generator.py",
     "libraries_helper.py",        # <--- NEW FILE
     "demo_libraries.py",          # <--- NEW FILE
+    "asset_manager.py",
+    "video_asset.py",
     
     # Test files are in a 'test' subdirectory
     "test/test_all.py",
@@ -44,6 +46,7 @@ VERSION_CHECK_FILES = [
     "test/test_file_scanner.py",
     "test/test_metadata_processor.py",
     "test/test_libraries.py",     # <--- NEW TEST FILE
+    "test/test_assets.py"
 ]
 
 from pathlib import Path
