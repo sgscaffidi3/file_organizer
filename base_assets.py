@@ -1,10 +1,5 @@
-import json
-import sys
-import argparse
-from pathlib import Path
-from typing import Dict, Any
-
-# --- PROJECT METADATA ---
+# ==============================================================================
+# File: base_assets.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 1
 _CHANGELOG_ENTRIES = [
@@ -12,19 +7,36 @@ _CHANGELOG_ENTRIES = [
     "Implemented GenericFileAsset, AudioAsset, DocumentAsset, and ImageAsset.",
     "Standardized JSON 'backpack' across all asset types.",
     "Added project-standard versioning and CLI --version support.",
-    "Added _clean_numeric helper for ImageAsset dimension scrubbing."
+    "Added _clean_numeric helper for ImageAsset dimension scrubbing.",
+    "FEATURE: Added get_friendly_size() for dynamic unit scaling (B, KiB, MiB, GiB)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.1.5
+# Version: 0.1.6
+# ------------------------------------------------------------------------------
+import json
+import sys
+import argparse
+from pathlib import Path
+from typing import Dict, Any
 
 class GenericFileAsset:
     """Base model for all files; handles file identity and the JSON backpack."""
     def __init__(self, file_path: Path, meta: Dict[str, Any]):
         self.path = file_path
         self.name = file_path.name
-        self.size = meta.get('OS_File_Size') or meta.get('File Size', 0)
+        # Store the raw bytes for calculations
+        self.size_bytes = int(meta.get('OS_File_Size') or meta.get('File Size', 0))
         self.recorded_date = meta.get('Recorded_Date') or meta.get('OS_Date_Created', "Unknown")
         self.extended_metadata = meta
+
+    def get_friendly_size(self) -> str:
+        """Returns the file size in the most appropriate unit (B, KiB, MiB, GiB, TiB)."""
+        size = float(self.size_bytes)
+        for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
+            if size < 1024.0:
+                return f"{size:.2f} {unit}"
+            size /= 1024.0
+        return f"{size:.2f} PiB"
 
     def get_full_json(self) -> str:
         """Returns the exhaustive metadata dictionary as a JSON string."""
@@ -36,7 +48,6 @@ class AudioAsset(GenericFileAsset):
         super().__init__(file_path, meta)
         self.duration = meta.get('Duration', "00:00:00")
         self.bitrate = meta.get('Audio_Bit_Rate') or meta.get('Bit Rate', "Unknown")
-        self.channels = meta.get('Audio_Channels', "Unknown")
 
 class ImageAsset(GenericFileAsset):
     """Asset model for images (JPG, PNG, etc.)."""
@@ -44,10 +55,8 @@ class ImageAsset(GenericFileAsset):
         super().__init__(file_path, meta)
         self.width = self._clean_numeric(meta.get('Width', 0))
         self.height = self._clean_numeric(meta.get('Height', 0))
-        self.camera = meta.get('Camera_Model') or meta.get('Make', "Unknown")
 
     def _clean_numeric(self, value: Any) -> int:
-        """Strip units (like 'pixels') and return a clean integer."""
         try:
             return int(''.join(filter(str.isdigit, str(value))))
         except (ValueError, TypeError):
@@ -58,7 +67,6 @@ class DocumentAsset(GenericFileAsset):
     def __init__(self, file_path: Path, meta: Dict[str, Any]):
         super().__init__(file_path, meta)
         self.pages = meta.get('Page_Count', 1)
-        self.author = meta.get('Author', "Unknown")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Base Asset Models")
