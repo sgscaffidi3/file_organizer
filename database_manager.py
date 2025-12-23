@@ -12,14 +12,16 @@ _CHANGELOG_ENTRIES = [
     "Added execute_query method to simplify database operations.",
     "Implemented context manager methods (__enter__, __exit__) for reliable connection handling.",
     "Improved execute_query to handle SELECT COUNT(*) returning empty results gracefully.",
-    "CRITICAL SCHEMA FIX: Added the UNIQUE constraint to the 'path' column in the FilePathInstances table definition. (Resolves test_03_duplicate_path_insertion_is_ignored).",
-    "CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' to maintain consistency with the field name used in deduplicator.py's SQL queries.",
+    "CRITICAL SCHEMA FIX: Added the UNIQUE constraint to the 'path' column in the FilePathInstances table definition.",
+    "CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' to maintain consistency.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
     "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "CRITICAL SCHEMA FIX: Added the `date_modified` column to the `FilePathInstances` table to support deduplication logic based on file modification time.",
-    "CRITICAL API FIX: Updated `execute_query` to return the `rowcount` (number of affected/inserted rows) for non-SELECT queries. (Required for `FileScanner` to track insertions).",
-    "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`. This resolves the `IntegrityError: NOT NULL constraint failed` and prevents cascading errors."
+    "CRITICAL SCHEMA FIX: Added the `date_modified` column to the `FilePathInstances` table.",
+    "CRITICAL API FIX: Updated `execute_query` to return the `rowcount` for non-SELECT queries.",
+    "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`.",
+    "FEATURE: Added dump_database() method and --dump_db CLI option for quick debugging inspection."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
 import sqlite3
 from typing import Optional, Tuple, List
@@ -27,7 +29,7 @@ import os
 import sys
 import argparse
 from contextlib import contextmanager
-# from version_util import print_version_info # Assuming this is available
+from pathlib import Path
 
 class DatabaseManager:
     """
@@ -51,6 +53,11 @@ class DatabaseManager:
     def connect(self):
         """Establishes a connection to the SQLite database."""
         if self.conn is None:
+            # Ensure the directory exists if we are creating a new DB
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir and not os.path.exists(db_dir):
+                os.makedirs(db_dir, exist_ok=True)
+                
             self.conn = sqlite3.connect(self.db_path)
             # Enable foreign key constraint enforcement
             self.conn.execute('PRAGMA foreign_keys = ON;')
@@ -93,68 +100,129 @@ class DatabaseManager:
             raise e
     
     def create_schema(self):
-            """Creates the necessary tables if they don't exist."""
-            if not self.conn:
-                self.connect()
+        """Creates the necessary tables if they don't exist."""
+        if not self.conn:
+            self.connect()
 
-            # MediaContent: Updated with hybrid metadata support
-            content_table_sql = """
-            CREATE TABLE IF NOT EXISTS MediaContent (
-                content_hash TEXT PRIMARY KEY,
-                size INTEGER NOT NULL,
-                file_type_group TEXT NOT NULL,
-                
-                -- Core Metadata Columns
-                date_best TEXT, 
-                width INTEGER,
-                height INTEGER,
-                duration REAL,
-                bitrate INTEGER,
-                title TEXT,
-                video_codec TEXT, -- New: Explicit column for codec
-                
-                -- Hybrid "Backpack" Column
-                extended_metadata TEXT -- New: Stores exhaustive JSON blob
-            );
-            """
-            # FilePathInstances: List of all file locations. 
-            instance_table_sql = """
-            CREATE TABLE IF NOT EXISTS FilePathInstances (
-                file_id INTEGER PRIMARY KEY,
-                content_hash TEXT NOT NULL,
-                path TEXT UNIQUE NOT NULL, 
-                original_full_path TEXT NOT NULL,
-                original_relative_path TEXT NOT NULL,
-                
-                -- Metadata derived from file system:
-                date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
-                date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Add date_modified
-                
-                -- Deduplication/Organization fields:
-                is_primary BOOLEAN DEFAULT 0,
-                new_path_id INTEGER,
-
-                FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) ON DELETE CASCADE
-            );
-            """
+        # MediaContent: Updated with hybrid metadata support
+        content_table_sql = """
+        CREATE TABLE IF NOT EXISTS MediaContent (
+            content_hash TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            file_type_group TEXT NOT NULL,
             
+            -- Core Metadata Columns
+            date_best TEXT, 
+            width INTEGER,
+            height INTEGER,
+            duration REAL,
+            bitrate INTEGER,
+            title TEXT,
+            video_codec TEXT, -- New: Explicit column for codec
+            
+            -- Hybrid "Backpack" Column
+            extended_metadata TEXT -- New: Stores exhaustive JSON blob
+        );
+        """
+        # FilePathInstances: List of all file locations. 
+        instance_table_sql = """
+        CREATE TABLE IF NOT EXISTS FilePathInstances (
+            file_id INTEGER PRIMARY KEY,
+            content_hash TEXT NOT NULL,
+            path TEXT UNIQUE NOT NULL, 
+            original_full_path TEXT NOT NULL,
+            original_relative_path TEXT NOT NULL,
+            
+            -- Metadata derived from file system:
+            date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
+            date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Add date_modified
+            
+            -- Deduplication/Organization fields:
+            is_primary BOOLEAN DEFAULT 0,
+            new_path_id INTEGER,
+
+            FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) ON DELETE CASCADE
+        );
+        """
+        
+        try:
+            self.conn.execute(content_table_sql)
+            self.conn.execute(instance_table_sql)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            self.conn.rollback()
+            print(f"Error creating schema: {e}")
+            raise e
+
+    def dump_database(self):
+        """Prints the contents of all tables in a friendly format."""
+        if not self.conn:
+            self.connect()
+        
+        print(f"\n{'='*60}")
+        print(f"DATABASE DUMP: {self.db_path}")
+        print(f"{'='*60}")
+
+        # Helper to print a table
+        def print_table(table_name):
+            print(f"\n--- Table: {table_name} ---")
             try:
-                self.conn.execute(content_table_sql)
-                self.conn.execute(instance_table_sql)
-                self.conn.commit()
+                # Get columns
+                cursor = self.conn.execute(f"PRAGMA table_info({table_name})")
+                columns = [col[1] for col in cursor.fetchall()]
+                
+                # Get rows
+                rows = self.execute_query(f"SELECT * FROM {table_name}")
+                
+                if not rows:
+                    print("  [Empty Table]")
+                    return
+
+                # Calculate column widths
+                col_widths = [len(c) for c in columns]
+                for row in rows:
+                    for i, val in enumerate(row):
+                        col_widths[i] = max(col_widths[i], len(str(val)))
+                
+                # Print Header
+                header = " | ".join(f"{col:<{col_widths[i]}}" for i, col in enumerate(columns))
+                print(header)
+                print("-" * len(header))
+                
+                # Print Rows
+                for row in rows:
+                    print(" | ".join(f"{str(val):<{col_widths[i]}}" for i, val in enumerate(row)))
+                
+                print(f"  ({len(rows)} records found)")
+                
             except sqlite3.Error as e:
-                self.conn.rollback()
-                print(f"Error creating schema: {e}")
-                raise e
+                print(f"  Error reading table: {e}")
+
+        print_table("MediaContent")
+        print_table("FilePathInstances")
+        print(f"\n{'='*60}\n")
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description="Database Manager Utility")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    parser.add_argument('--dump_db', action='store_true', help='Dump the contents of the database to stdout.')
+    parser.add_argument('--db', type=str, default=r"organized_media_output/metadata.sqlite", help='Path to the database file (default: organized_media_output/metadata.sqlite)')
+    
     args = parser.parse_args()
 
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Database Manager")
+        sys.exit(0)
+
+    if args.dump_db:
+        if not os.path.exists(args.db):
+            print(f"Error: Database file not found at '{args.db}'")
+            sys.exit(1)
+            
+        db = DatabaseManager(args.db)
+        with db:
+            db.dump_database()
         sys.exit(0)
