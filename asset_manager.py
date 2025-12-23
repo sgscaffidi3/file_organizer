@@ -18,6 +18,7 @@ import json
 from video_asset import VideoAsset
 from libraries_helper import get_video_metadata
 from database_manager import DatabaseManager
+from base_assets import GenericFileAsset, AudioAsset, ImageAsset, DocumentAsset
 
 class AssetManager:
     """
@@ -28,37 +29,38 @@ class AssetManager:
         self.db = db
         self.verbose = verbose
 
-    def process_file(self, file_path: Path, content_hash: str):
-        """
-        Extracts metadata and updates the MediaContent table 
-        using the VideoAsset hybrid model.
-        """
-        # 1. Extract metadata from file
+    def process_file(self, file_path: Path, content_hash: str, group: str = 'VIDEO'):
         raw_meta = get_video_metadata(file_path, verbose=self.verbose)
         
-        # 2. Wrap in VideoAsset model (Hybrid logic happens here)
-        asset = VideoAsset(file_path, raw_meta)
-        
-        # 3. Update the Database
+        # Simple Router logic
+        if group == 'VIDEO':
+            asset = VideoAsset(file_path, raw_meta)
+        elif group == 'IMAGE':
+            asset = ImageAsset(file_path, raw_meta)
+        elif group == 'AUDIO':
+            asset = AudioAsset(file_path, raw_meta)
+        elif group == 'DOCUMENT':
+            asset = DocumentAsset(file_path, raw_meta)
+        else:
+            asset = GenericFileAsset(file_path, raw_meta)
+
+        # Standard SQL Update (Using the common interface)
         update_sql = """
         UPDATE MediaContent SET
-            date_best = ?,
-            width = ?,
-            height = ?,
-            duration = ?,
-            bitrate = ?,
-            video_codec = ?,
-            extended_metadata = ?
+            date_best = ?, width = ?, height = ?, duration = ?, 
+            bitrate = ?, video_codec = ?, extended_metadata = ?
         WHERE content_hash = ?;
         """
+        
+        # Use getattr to safely handle missing attributes for non-video files
         params = (
             asset.recorded_date,
-            asset.width,
-            asset.height,
-            asset.duration,
-            asset.video_bitrate,
-            asset.video_codec,
-            asset.get_full_json(), # The JSON Backpack
+            getattr(asset, 'width', None),
+            getattr(asset, 'height', None),
+            getattr(asset, 'duration', None),
+            getattr(asset, 'bitrate', None),
+            getattr(asset, 'video_codec', None),
+            asset.get_full_json(),
             content_hash
         )
         self.db.execute_query(update_sql, params)

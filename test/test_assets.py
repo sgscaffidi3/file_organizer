@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Attempt imports from project root
 try:
+    from base_assets import AudioAsset, ImageAsset
     from video_asset import VideoAsset
     from asset_manager import AssetManager
 except ImportError as e:
@@ -110,7 +111,21 @@ class TestAssetArchitecture(unittest.TestCase):
         self.assertEqual(params[1], 1280)   # Width promoted to column
         self.assertIn('"Width": "1280"', params[6]) # Width also in JSON backpack
         self.assertEqual(params[7], test_hash) # WHERE clause hash match
+        
+    def test_06_audio_asset_parsing(self):
+        """Verify AudioAsset handles duration and bitrates."""
+        meta = {"Duration": "00:03:45", "Bit Rate": "320kbps"}
+        asset = AudioAsset(Path("song.mp3"), meta)
+        self.assertEqual(asset.duration, "00:03:45")
+        self.assertEqual(asset.name, "song.mp3")
 
+    def test_07_image_asset_cleaning(self):
+        """Verify ImageAsset cleans dimensions and captures camera make."""
+        meta = {"Width": "4000 px", "Height": "3000", "Make": "Sony"}
+        asset = ImageAsset(Path("photo.jpg"), meta)
+        self.assertEqual(asset.width, 4000)
+        self.assertEqual(asset.camera, "Sony")
+        self.assertIn('"Make": "Sony"', asset.get_full_json())
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Asset Architecture Unit Tests")
     parser.add_argument('-v', '--version', action='store_true', help='Show version info.')

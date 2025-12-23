@@ -35,6 +35,7 @@ except ImportError:
 # --- Project Dependencies ---
 from database_manager import DatabaseManager
 from config_manager import ConfigManager
+from asset_manager import AssetManager
 
 def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     """Extracts real EXIF and dimension data using Pillow."""
@@ -120,21 +121,40 @@ class MetadataProcessor:
             self.processed_count += rows_updated
 
     def process_metadata(self):
+        """Processes MediaContent records using the new AssetManager conductor."""
         self.processed_count = 0
         self.skip_count = 0
         records = self._get_files_to_process()
+        
+        # Instantiate the new Conductor
+        asset_mgr = AssetManager(self.db)
+
         for content_hash, group, path_str in records:
             file_path = Path(path_str)
+            
             if not file_path.exists():
                 self.skip_count += 1
                 continue
-            extractor = self.extractors.get(group)
-            if extractor:
-                metadata = extractor(file_path)
-                if metadata: self._update_media_content(content_hash, metadata)
+
+            # We now delegate EVERYTHING to the AssetManager for VIDEO group
+            if group == 'VIDEO':
+                try:
+                    # This one line replaces extraction, cleaning, and DB updating
+                    asset_mgr.process_file(file_path, content_hash)
+                    self.processed_count += 1
+                except Exception as e:
+                    print(f"Error processing {file_path}: {e}")
+                    self.skip_count += 1
+            else:
+                # Fallback for IMAGE or other groups until they get Asset models
+                extractor = self.extractors.get(group)
+                if extractor:
+                    metadata = extractor(file_path)
+                    if metadata: self._update_media_content(content_hash, metadata)
+                    else: self.skip_count += 1
                 else: self.skip_count += 1
-            else: self.skip_count += 1
-        print(f"Metadata processing complete. Updated {self.processed_count} records, skipped {self.skip_count} records.")
+                
+        print(f"Metadata processing complete. Updated {self.processed_count} records.")
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == "__main__":
