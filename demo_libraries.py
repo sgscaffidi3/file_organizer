@@ -21,10 +21,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Integrated GenericFileAsset.get_friendly_size() for dynamic unit scaling.",
     "DISPLAY FIX: Restored Dimensions, Aspect, Audio, and Date fields to demo output.",
     "PERSISTENCE: Added DatabaseManager integration to save results to 'demo/metadata.sqlite'.",
-    "LOGIC: Added file hashing and 'Smart Update' logic to detect and report changed metadata fields."
+    "LOGIC: Added file hashing and 'Smart Update' logic to detect and report changed metadata fields.",
+    "DB FIX: Explicitly inject 'Friendly_Size' into the JSON backpack so the database stores the readable format."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.19
+# Version: 0.5.20
 # ------------------------------------------------------------------------------
 import sys
 import argparse
@@ -147,6 +148,10 @@ def run_demo():
                     asset = GenericFileAsset(file_path, raw_meta)
                     media_type = "GENERIC"
 
+                # CRITICAL UPDATE: Inject Friendly Size into the Backpack for DB Storage
+                if asset:
+                    asset.extended_metadata['Friendly_Size'] = asset.get_friendly_size()
+
                 # 3. Database Logic (Smart Upsert)
                 existing_meta = get_existing_record(db, content_hash)
                 
@@ -161,27 +166,25 @@ def run_demo():
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         content_hash,
-                        asset.size_bytes,
+                        asset.size_bytes, # Still store raw bytes in 'size' column for sorting
                         media_type,
                         getattr(asset, 'width', None),
                         getattr(asset, 'height', None),
                         getattr(asset, 'duration', None),
                         getattr(asset, 'video_codec', None),
-                        asset.get_full_json()
+                        asset.get_full_json() # 'Friendly_Size' is now inside this JSON
                     ))
                 else:
                     # CHECK FOR CHANGES
-                    # We compare the generated JSON backpack with the stored one
                     current_json_dict = json.loads(asset.get_full_json())
                     diffs = compare_metadata(existing_meta, current_json_dict)
                     
                     if diffs:
                         files_updated += 1
-                        diff_str = "; ".join(diffs[:3]) # Show first 3 changes
+                        diff_str = "; ".join(diffs[:3]) 
                         if len(diffs) > 3: diff_str += "..."
-                        status_msg = f"[UPDATED] Changed fields: {diff_str}"
+                        status_msg = f"[UPDATED] Changed: {diff_str}"
                         
-                        # Update the record
                         db.execute_query("""
                             UPDATE MediaContent 
                             SET extended_metadata = ?, width = ?, height = ?
@@ -191,7 +194,7 @@ def run_demo():
                         files_unchanged += 1
                         status_msg = "[UNCHANGED] Skipped"
 
-                # Ensure FilePathInstances link exists (Upsert logic for path)
+                # Ensure FilePathInstances link exists
                 db.execute_query("""
                     INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path, is_primary)
                     VALUES (?, ?, ?, ?, 1)
@@ -202,13 +205,12 @@ def run_demo():
 
             # 4. Display
             if use_tqdm:
-                # Print status above the bar so we don't clutter the bar itself
-                if "UNCHANGED" not in status_msg: # Reduce noise, only show activity
+                if "UNCHANGED" not in status_msg:
                     tqdm.write(f"{file_path.name:<30} | {asset.get_friendly_size() if asset else 'N/A'} | {status_msg}")
 
     print("-" * 60)
     print(f"Summary: New: {files_new} | Updated: {files_updated} | Unchanged: {files_unchanged}")
-    print("Run the following command to verify the database:")
+    print("Run the following command to verify the database contents:")
     print(f"python database_manager.py --dump_db --db {DEMO_DB_PATH}")
 
 if __name__ == '__main__':
