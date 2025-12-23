@@ -28,11 +28,11 @@ class AssetManager:
     def __init__(self, db: DatabaseManager, verbose: bool = False):
         self.db = db
         self.verbose = verbose
-
+        
     def process_file(self, file_path: Path, content_hash: str, group: str = 'VIDEO'):
         raw_meta = get_video_metadata(file_path, verbose=self.verbose)
         
-        # Simple Router logic
+        # Router logic: Choose the correct model
         if group == 'VIDEO':
             asset = VideoAsset(file_path, raw_meta)
         elif group == 'IMAGE':
@@ -44,21 +44,19 @@ class AssetManager:
         else:
             asset = GenericFileAsset(file_path, raw_meta)
 
-        # Standard SQL Update (Using the common interface)
         update_sql = """
         UPDATE MediaContent SET
-            date_best = ?, width = ?, height = ?, duration = ?, 
+            date_best = ?, width = ?, height = ?, duration = ?,
             bitrate = ?, video_codec = ?, extended_metadata = ?
         WHERE content_hash = ?;
         """
-        
-        # Use getattr to safely handle missing attributes for non-video files
+        # Safely handle attributes that might not exist on all models
         params = (
             asset.recorded_date,
             getattr(asset, 'width', None),
             getattr(asset, 'height', None),
             getattr(asset, 'duration', None),
-            getattr(asset, 'bitrate', None),
+            getattr(asset, 'bitrate', None if group != 'AUDIO' else asset.bitrate),
             getattr(asset, 'video_codec', None),
             asset.get_full_json(),
             content_hash
