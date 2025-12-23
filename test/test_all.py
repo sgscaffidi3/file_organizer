@@ -39,7 +39,8 @@ TEST_MODULES = [
     "test_file_scanner",
     "test_metadata_processor",
     "test_deduplicator",
-    "test_libraries"
+    "test_libraries",
+    "test_assets"
 ]
 
 # List of files to check for the --get_versions functionality
@@ -63,7 +64,8 @@ VERSION_CHECK_FILES = [
     "test/test_deduplicator.py",
     "test/test_file_scanner.py",
     "test/test_metadata_processor.py",
-    "test/test_libraries.py" # <--- ADD THIS LINE
+    "test/test_libraries.py",
+    "test/test_assets.py"
 ]
 
 # ==============================================================================
