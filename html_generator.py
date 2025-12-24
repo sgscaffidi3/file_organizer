@@ -2,25 +2,27 @@
 # File: html_generator.py
 # ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
     "Initial implementation of HTMLGenerator class.",
     "Added DataTables integration and Metadata Inspector.",
     "FEATURE: Added Hierarchical Folder Browser sidebar.",
     "FEATURE: Added dynamic folder-based filtering logic.",
     "FIX: Robust path handling for Python versions < 3.12.",
-    "FIX: Restored missing CLI arguments (--version, --db) in the main block."
+    "FIX: Restored missing CLI arguments (--version, --db).",
+    "FEATURE: implemented Collapsible Folder Tree using <details> tags.",
+    "FEATURE: Added 'Type View' (Browse by Media/Extension).",
+    "FEATURE: Added 'Duplicates View' (Browse by Hash Collision)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.1
+# Version: 0.6.0
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict
+from collections import defaultdict
 import argparse
-import datetime
 import sys
 import json
-import urllib.parse
 
 from database_manager import DatabaseManager
 from config_manager import ConfigManager 
@@ -33,6 +35,7 @@ class HTMLGenerator:
         self.files_reported = 0
 
     def _get_organized_media_data(self) -> List[Tuple]:
+        """Queries database for all file instances, including duplicate counts."""
         try:
             columns_res = self.db.execute_query("PRAGMA table_info(MediaContent)")
             col_names = [str(col[1]).lower() for col in columns_res] if columns_res else []
@@ -41,43 +44,117 @@ class HTMLGenerator:
         date_col = "mc.date_best" if "date_best" in col_names else \
                    "mc.recorded_date" if "recorded_date" in col_names else "'Unknown'"
 
+        # We need a subquery or join to get duplicate counts per hash
         query = f"""
         SELECT 
-            mc.content_hash, mc.file_type_group, {date_col}, 
-            fpi.original_relative_path, mc.size, mc.width, mc.height,
-            fpi.original_full_path, mc.extended_metadata
+            mc.content_hash, 
+            mc.file_type_group, 
+            {date_col}, 
+            fpi.original_relative_path, 
+            mc.size, 
+            mc.width, 
+            mc.height,
+            fpi.original_full_path, 
+            mc.extended_metadata,
+            (SELECT COUNT(*) FROM FilePathInstances WHERE content_hash = mc.content_hash) as dupe_count
         FROM MediaContent mc
         JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
-        GROUP BY fpi.original_full_path
         ORDER BY fpi.original_relative_path ASC;
         """
         return self.db.execute_query(query)
 
-    def _build_folder_tree(self, paths: List[str]) -> Dict:
-        """Converts a list of relative paths into a nested dictionary tree."""
-        tree = {}
-        for path_str in paths:
-            # We use the parent directory of the file to build the tree
-            parts = Path(path_str).parent.parts
-            current = tree
+    def _build_trees(self, data: List[Tuple]):
+        """Builds data structures for Folders, Types, and Duplicates."""
+        folder_tree = {}
+        type_tree = defaultdict(lambda: defaultdict(int))
+        dupe_groups = defaultdict(list)
+
+        for row in data:
+            c_hash, group, _, rel_path, _, _, _, _, _, dupe_count = row
+            ext = Path(rel_path).suffix.lower() or "no_ext"
+            
+            # 1. Folder Tree
+            parts = Path(rel_path).parent.parts
+            current = folder_tree
             for part in parts:
                 if part not in current:
                     current[part] = {}
                 current = current[part]
-        return tree
 
-    def _render_tree_html(self, tree: Dict, current_path: str = "") -> str:
-        """Recursively generates HTML for the folder sidebar."""
+            # 2. Type Tree
+            type_tree[group][ext] += 1
+
+            # 3. Duplicates (Only if count > 1)
+            if dupe_count > 1:
+                # Store the primary name associated with this hash for the label
+                if c_hash not in dupe_groups:
+                     dupe_groups[c_hash] = {"count": dupe_count, "name": Path(rel_path).name}
+
+        return folder_tree, type_tree, dupe_groups
+
+    def _render_folder_tree_html(self, tree: Dict, current_path: str = "") -> str:
+        """Recursive collapsible directory tree using <details>."""
         if not tree: return ""
-        html = "<ul>"
+        html = '<ul class="tree-list">'
         for folder, subtree in sorted(tree.items()):
-            # Build the path used for filtering in JS
-            clean_folder = folder.replace("'", "\\'")
             full_path = f"{current_path}/{folder}".strip("/")
-            html += f'<li><span class="folder-link" onclick="filterFolder(\'{full_path}\')">📂 {folder}</span>'
-            if subtree:
-                html += self._render_tree_html(subtree, full_path)
-            html += "</li>"
+            safe_path = full_path.replace("'", "\\'")
+            
+            # If leaf node (no children directories), just show link
+            if not subtree:
+                html += f'<li><span class="tree-item" onclick="filterTable(\'folder\', \'{safe_path}\')">📁 {folder}</span></li>'
+            else:
+                # Collapsible node
+                html += f'''
+                <li>
+                    <details>
+                        <summary class="tree-summary" onclick="filterTable('folder', '{safe_path}')">📂 {folder}</summary>
+                        {self._render_folder_tree_html(subtree, full_path)}
+                    </details>
+                </li>
+                '''
+        html += "</ul>"
+        return html
+
+    def _render_type_tree_html(self, tree: Dict) -> str:
+        """Grouped list by Media Type -> Extension."""
+        html = '<ul class="type-list">'
+        icons = {'IMAGE': '🖼️', 'VIDEO': '🎬', 'AUDIO': '🎵', 'DOCUMENT': '📄'}
+        
+        for group, extensions in sorted(tree.items()):
+            icon = icons.get(group, '📁')
+            html += f'''
+            <li>
+                <details open>
+                    <summary class="type-summary">{icon} {group}</summary>
+                    <ul>
+            '''
+            for ext, count in sorted(extensions.items()):
+                # Filter value: "IMAGE|.jpg" (we will split this in JS)
+                filter_val = f"{group}|{ext}"
+                html += f'<li class="tree-item" onclick="filterTable(\'type\', \'{filter_val}\')">{ext} <span class="badge-count">{count}</span></li>'
+            
+            html += '</ul></details></li>'
+        html += "</ul>"
+        return html
+
+    def _render_dupe_tree_html(self, dupes: Dict) -> str:
+        """List of duplicate groups."""
+        if not dupes: return "<p style='padding:10px; color:#888'>No duplicates found! 🎉</p>"
+        
+        html = '<ul class="dupe-list">'
+        # Sort by duplicate count descending
+        sorted_dupes = sorted(dupes.items(), key=lambda x: x[1]['count'], reverse=True)
+        
+        for c_hash, info in sorted_dupes:
+            count = info['count']
+            name = info['name']
+            html += f'''
+            <li class="tree-item dupe-item" onclick="filterTable('hash', '{c_hash}')">
+                <span class="dupe-name">{name}</span>
+                <span class="badge-fail">{count} copies</span>
+            </li>
+            '''
         html += "</ul>"
         return html
 
@@ -85,12 +162,11 @@ class HTMLGenerator:
         html_rows = ""
         self.files_reported = len(data)
 
-        for c_hash, group, date, rel_path, size, w, h, full_path, meta_json in data:
+        for c_hash, group, date, rel_path, size, w, h, full_path, meta_json, dupe_count in data:
             size_str = f"{size / (1024*1024):.1f} MB" if size > 1024*1024 else f"{size/1024:.1f} KB"
             filename = Path(rel_path).name
+            ext = Path(rel_path).suffix.lower()
             dir_path = str(Path(rel_path).parent).replace('\\', '/')
-            
-            # Sanitize paths for HTML/f-string compatibility
             safe_full_path = str(full_path).replace('\\', '/')
             file_link = f"file:///{safe_full_path}"
             
@@ -102,15 +178,19 @@ class HTMLGenerator:
             elif group == 'AUDIO':
                 media_html = f'<audio class="preview-audio" controls><source src="{file_link}"></audio>'
             else:
-                media_html = f'📄 <a href="{file_link}" target="_blank" style="color:#03dac6">Open File</a>'
+                media_html = f'📄 <a href="{file_link}" target="_blank" style="color:#03dac6">Open</a>'
 
-            # Escape metadata for JavaScript modal
             js_meta = meta_json.replace('\\', '\\\\').replace("'", "&apos;")
-
+            
+            # Add data attributes for all filtering modes
             html_rows += f"""
-            <tr data-folder="{dir_path}">
+            <tr data-folder="{dir_path}" data-hash="{c_hash}" data-group="{group}" data-ext="{ext}">
                 <td><span class="badge">{group}</span></td>
-                <td><strong>{filename}</strong><br><small style="color:#888">{rel_path}</small></td>
+                <td>
+                    <strong>{filename}</strong><br>
+                    <small style="color:#888">{rel_path}</small>
+                    {f'<br><span class="badge-fail">DUPLICATE</span>' if dupe_count > 1 else ''}
+                </td>
                 <td>{media_html}</td>
                 <td data-order="{size}">{size_str}</td>
                 <td><button class="meta-btn" onclick='showMeta("{filename}", {js_meta})'>🔍</button></td>
@@ -120,10 +200,13 @@ class HTMLGenerator:
 
     def generate_html_report(self):
         data = self._get_organized_media_data()
-        all_rel_paths = [row[3] for row in data]
-        folder_tree = self._build_folder_tree(all_rel_paths)
         
-        sidebar_html = self._render_tree_html(folder_tree)
+        folder_tree, type_tree, dupe_groups = self._build_trees(data)
+        
+        sidebar_folders = self._render_folder_tree_html(folder_tree)
+        sidebar_types = self._render_type_tree_html(type_tree)
+        sidebar_dupes = self._render_dupe_tree_html(dupe_groups)
+        
         body_content = self._generate_html_body(data)
         
         html_content = f"""
@@ -131,45 +214,94 @@ class HTMLGenerator:
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Media Browser | Hierarchical Explorer</title>
+    <title>Media Explorer v{_MAJOR_VERSION}.{_MINOR_VERSION}</title>
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
     <style>
         body {{ font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; display: flex; height: 100vh; margin: 0; overflow: hidden; }}
-        #sidebar {{ width: 320px; background: #1e1e1e; border-right: 1px solid #333; overflow-y: auto; padding: 20px; flex-shrink: 0; }}
-        #main {{ flex-grow: 1; padding: 25px; overflow-y: auto; background: #121212; }}
-        h1, h3 {{ color: #bb86fc; }}
-        ul {{ list-style-type: none; padding-left: 18px; margin: 8px 0; }}
-        .folder-link {{ cursor: pointer; color: #aaa; font-size: 0.95em; }}
-        .folder-link:hover {{ color: #03dac6; }}
+        
+        /* Sidebar container */
+        #sidebar {{ width: 340px; background: #1e1e1e; border-right: 1px solid #333; display: flex; flex-direction: column; flex-shrink: 0; }}
+        
+        /* Tabs */
+        .tab-bar {{ display: flex; border-bottom: 1px solid #333; }}
+        .tab-btn {{ flex: 1; padding: 15px 0; background: #252525; color: #888; border: none; cursor: pointer; font-weight: bold; transition: 0.2s; }}
+        .tab-btn:hover {{ background: #2a2a2a; color: #fff; }}
+        .tab-btn.active {{ background: #1e1e1e; color: #bb86fc; border-bottom: 2px solid #bb86fc; }}
+        
+        /* Sidebar Content Areas */
+        .tab-content {{ flex-grow: 1; overflow-y: auto; padding: 15px; display: none; }}
+        .tab-content.active {{ display: block; }}
+        
+        /* Tree Styling */
+        ul.tree-list, ul.type-list, ul.dupe-list {{ list-style: none; padding-left: 10px; margin: 0; }}
+        details > summary {{ cursor: pointer; padding: 5px; color: #ccc; list-style: none; }}
+        details > summary::marker {{ display: none; }} /* Hide default arrow */
+        details > summary:hover {{ color: #fff; }}
+        .tree-item {{ display: block; padding: 4px 8px; cursor: pointer; color: #888; font-size: 0.9em; }}
+        .tree-item:hover {{ color: #03dac6; background: #2a2a2a; border-radius: 4px; }}
+        
+        /* Duplicates List */
+        .dupe-item {{ display: flex; justify-content: space-between; border-bottom: 1px solid #333; padding: 8px; }}
+        .dupe-name {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }}
+        
+        /* Main Area */
+        #main {{ flex-grow: 1; padding: 20px; overflow-y: auto; background: #121212; }}
         .container {{ background: #1e1e1e; padding: 20px; border-radius: 12px; }}
+        
+        /* Table Elements */
         table.dataTable {{ background: #1e1e1e; color: #e0e0e0; font-size: 0.9em; }}
-        .preview-img {{ max-width: 120px; border-radius: 4px; border: 1px solid #444; }}
-        .preview-video {{ width: 220px; border-radius: 4px; }}
-        .badge {{ background: #3700b3; padding: 3px 7px; border-radius: 4px; font-size: 0.75em; }}
-        .meta-btn {{ background: #03dac6; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; }}
-        .modal {{ display: none; position: fixed; z-index: 999; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); }}
-        .modal-content {{ background: #242424; margin: 5% auto; padding: 25px; width: 65%; border-radius: 10px; position: relative; }}
-        pre {{ background: #000; color: #00ff41; padding: 15px; border-radius: 6px; overflow-x: auto; font-family: monospace; }}
-        .close {{ position: absolute; right: 20px; top: 15px; color: #aaa; font-size: 30px; cursor: pointer; }}
+        .preview-img {{ max-width: 100px; max-height: 80px; border: 1px solid #444; border-radius: 4px; }}
+        .preview-video, .preview-audio {{ width: 200px; }}
+        
+        /* Badges */
+        .badge {{ background: #3700b3; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; }}
+        .badge-count {{ background: #333; padding: 2px 6px; border-radius: 8px; font-size: 0.8em; float: right; }}
+        .badge-fail {{ background: #cf6679; color: #000; padding: 2px 6px; border-radius: 4px; font-size: 0.7em; font-weight: bold; }}
+        
+        /* Modal */
+        .meta-btn {{ background: #03dac6; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; }}
+        .modal {{ display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); }}
+        .modal-content {{ background: #242424; margin: 5% auto; padding: 25px; width: 70%; border-radius: 10px; position: relative; }}
+        pre {{ background: #000; color: #00ff41; padding: 15px; overflow-x: auto; font-family: monospace; }}
+        .close {{ position: absolute; right: 20px; top: 15px; color: #fff; font-size: 30px; cursor: pointer; }}
     </style>
 </head>
 <body>
     <div id="sidebar">
-        <h3>📂 Folder Browser</h3>
-        <div class="folder-link" onclick="filterFolder('')" style="font-weight:bold; margin-bottom:10px;">🏠 All Files</div>
-        {sidebar_html}
+        <div class="tab-bar">
+            <button class="tab-btn active" onclick="switchTab('folders')">Folders</button>
+            <button class="tab-btn" onclick="switchTab('types')">Types</button>
+            <button class="tab-btn" onclick="switchTab('dupes')">Duplicates</button>
+        </div>
+
+        <div id="tab-folders" class="tab-content active">
+            <div class="tree-item" onclick="filterTable('reset', '')" style="margin-bottom:10px; font-weight:bold;">🏠 Show All Files</div>
+            {sidebar_folders}
+        </div>
+
+        <div id="tab-types" class="tab-content">
+            <div class="tree-item" onclick="filterTable('reset', '')" style="margin-bottom:10px; font-weight:bold;">🏠 Show All Files</div>
+            {sidebar_types}
+        </div>
+
+        <div id="tab-dupes" class="tab-content">
+            <p style="font-size:0.8em; color:#aaa; margin-top:0;">Click a group to isolate duplicates.</p>
+            {sidebar_dupes}
+        </div>
     </div>
+
     <div id="main">
         <div class="container">
-            <h1>Media Explorer</h1>
+            <h2 id="view-title" style="color:#bb86fc; margin-top:0;">All Files</h2>
             <table id="mediaTable" class="display" style="width:100%">
                 <thead>
-                    <tr><th>Type</th><th>File</th><th>Preview</th><th>Size</th><th>Meta</th></tr>
+                    <tr><th>Type</th><th>File Info</th><th>Preview</th><th>Size</th><th>Meta</th></tr>
                 </thead>
                 <tbody>{body_content}</tbody>
             </table>
         </div>
     </div>
+
     <div id="metaModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
@@ -177,21 +309,62 @@ class HTMLGenerator:
             <pre id="modalBody"></pre>
         </div>
     </div>
+
     <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
     <script>
         let table;
         $(document).ready(function() {{
-            table = $('#mediaTable').DataTable({{ pageLength: 10, order: [[1, 'asc']] }});
-        }});
-        function filterFolder(folderPath) {{
-            $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {{
-                let rowFolder = $(table.row(dataIndex).node()).attr('data-folder');
-                return folderPath === "" || rowFolder === folderPath || rowFolder.startsWith(folderPath + "/");
+            table = $('#mediaTable').DataTable({{ 
+                pageLength: 10,
+                order: [[1, 'asc']],
+                language: {{ searchPlaceholder: "Deep search..." }}
             }});
-            table.draw();
-            $.fn.dataTable.ext.search.pop();
+        }});
+
+        function switchTab(tabName) {{
+            $('.tab-content').removeClass('active');
+            $('.tab-btn').removeClass('active');
+            $('#tab-' + tabName).addClass('active');
+            $('button[onclick="switchTab(\\'' + tabName + '\\')"]').addClass('active');
         }}
+
+        function filterTable(mode, value) {{
+            // Clear previous filters first
+            $.fn.dataTable.ext.search = [];
+            
+            let title = "Filtered Results";
+
+            if (mode === 'reset') {{
+                title = "All Files";
+                table.search('').draw(); // Clear text search too
+            }} else {{
+                $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {{
+                    let node = $(table.row(dataIndex).node());
+                    
+                    if (mode === 'folder') {{
+                        let rowFolder = node.attr('data-folder');
+                        // Match folder or any subfolder
+                        return rowFolder === value || rowFolder.startsWith(value + "/");
+                    }}
+                    else if (mode === 'type') {{
+                        let parts = value.split('|'); // "IMAGE|.jpg"
+                        let rowGroup = node.attr('data-group');
+                        let rowExt = node.attr('data-ext');
+                        return rowGroup === parts[0] && rowExt === parts[1];
+                    }}
+                    else if (mode === 'hash') {{
+                        return node.attr('data-hash') === value;
+                    }}
+                    return true;
+                }});
+                title = (mode === 'hash') ? "Duplicate Group Inspector" : "Filtered: " + value;
+            }}
+            
+            $('#view-title').text(title);
+            table.draw();
+        }}
+
         function showMeta(name, data) {{
             document.getElementById('modalTitle').innerText = name;
             document.getElementById('modalBody').innerText = JSON.stringify(data, null, 4);
@@ -203,22 +376,22 @@ class HTMLGenerator:
 </body>
 </html>
 """
-        out_path = self.output_dir / "media_explorer.html"
+        out_path = self.output_dir / "media_dashboard.html"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         with open(out_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
-        print(f"\n[SUCCESS] Hierarchical Explorer generated at: {out_path.resolve()}")
+        print(f"\n[SUCCESS] Media Dashboard generated at: {out_path.resolve()}")
 
 if __name__ == "__main__":
     config_mgr = ConfigManager()
-    parser = argparse.ArgumentParser(description="Media Explorer HTML Generator")
-    parser.add_argument('-v', '--version', action='store_true', help="Show version")
-    parser.add_argument('--generate', action='store_true', help="Generate the report")
-    parser.add_argument('--db', type=str, help="Path to metadata.sqlite")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--generate', action='store_true')
+    parser.add_argument('--db', type=str)
     args = parser.parse_args()
 
     if args.version:
-        print(f"HTML Explorer Generator v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        print(f"HTML Dashboard Generator v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)
     
     db_path = Path(args.db) if args.db else config_mgr.OUTPUT_DIR / 'metadata.sqlite'
@@ -229,4 +402,9 @@ if __name__ == "__main__":
         else:
             print(f"Error: Database not found at {db_path}")
     else:
-        parser.print_help()
+        # Default behavior if run without args (convenience)
+        if db_path.exists():
+            with DatabaseManager(db_path) as db:
+                HTMLGenerator(db, config_mgr).generate_html_report()
+        else:
+            parser.print_help()
