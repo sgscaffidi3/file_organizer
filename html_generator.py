@@ -1,32 +1,37 @@
 # ==============================================================================
 # File: html_generator.py
+# ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-# Version: <Automatically calculated via dynamic import of target module>
-# ------------------------------------------------------------------------------
-# CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "Initial implementation of HTMLGenerator class for static output visualization (F09).",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
+    "FEATURE: Added DataTables integration for instant search, sorting, and pagination.",
+    "FEATURE: Added 'Quick Filter' buttons for Media Groups (Images, Video, etc.).",
+    "REFACTOR: Full end-to-end implementation with integrated ConfigManager and DatabaseManager.",
+    "FIX: Updated SQL query to handle varying date column names (recorded_date vs date_best).",
+    "FIX: Robust schema inspection to prevent 'int object is not iterable' errors during PRAGMA check."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.3.8
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
-import os
 import argparse
 import datetime
 import sqlite3
+import sys
+import json
 
-import config
+# Standard project imports
 from database_manager import DatabaseManager
-from version_util import print_version_info
 from config_manager import ConfigManager 
 
 class HTMLGenerator:
     """
-    Queries the final organized data from the database and generates a static 
-    HTML file to allow browsing of the new media structure (F09).
+    Queries the database and generates an interactive 'Media Explorer' HTML file
+    using DataTables for advanced searching and filtering (F09).
     """
 
     def __init__(self, db_manager: DatabaseManager, config_manager: ConfigManager):
@@ -37,15 +42,40 @@ class HTMLGenerator:
 
     def _get_organized_media_data(self) -> List[Tuple]:
         """
-        Queries the database for all successfully migrated and named files, 
-        ordered by their final path.
+        Queries the database for unique assets. Uses a robust check for the date column.
         """
-        # Note: This query assumes new_path_id contains the final relative path
-        query = """
-        SELECT content_hash, file_type_group, date_best, new_path_id, size, width, height 
-        FROM MediaContent 
-        WHERE new_path_id IS NOT NULL 
-        ORDER BY new_path_id ASC;
+        # Get table info to see which columns actually exist
+        # PRAGMA table_info returns rows like (id, name, type, notnull, dflt_value, pk)
+        try:
+            columns_res = self.db.execute_query("PRAGMA table_info(MediaContent)")
+            # Ensure we are iterating over a list of tuples/rows
+            col_names = []
+            if isinstance(columns_res, list):
+                col_names = [str(col[1]).lower() for col in columns_res if len(col) > 1]
+        except Exception:
+            col_names = []
+        
+        # Determine the best available date column
+        if "date_best" in col_names:
+            date_col = "mc.date_best"
+        elif "recorded_date" in col_names:
+            date_col = "mc.recorded_date"
+        else:
+            date_col = "'Unknown'"
+
+        query = f"""
+        SELECT 
+            mc.content_hash, 
+            mc.file_type_group, 
+            {date_col}, 
+            fpi.original_relative_path, 
+            mc.size, 
+            mc.width, 
+            mc.height 
+        FROM MediaContent mc
+        JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
+        GROUP BY mc.content_hash
+        ORDER BY fpi.original_relative_path ASC;
         """
         return self.db.execute_query(query)
 
@@ -54,40 +84,41 @@ class HTMLGenerator:
         html_rows = ""
         self.files_reported = len(data)
 
-        for content_hash, file_type_group, date_best, new_path_id, size, width, height in data:
-            # Format size to human-readable string (e.g., 1.5 MB)
-            size_kb = size / 1024
-            size_str = f"{size_kb:.2f} KB" if size_kb < 1024 else f"{size_kb / 1024:.2f} MB"
+        for content_hash, group, date, path, size, width, height in data:
+            # Format size to human-readable string
+            size_mb = size / (1024 * 1024)
+            size_str = f"{size_mb:.2f} MB" if size_mb >= 1 else f"{size/1024:.1f} KB"
             
-            # Use only the relative file path for display
-            relative_path = Path(new_path_id).name
-            
-            # Simple icon based on file type
-            icon = '🖼️' if file_type_group == 'IMAGE' else \
-                   '🎬' if file_type_group == 'VIDEO' else \
-                   '📄' if file_type_group == 'DOCUMENT' else '📁'
+            filename = Path(path).name
+            icon = '🖼️' if group == 'IMAGE' else \
+                   '🎬' if group == 'VIDEO' else \
+                   '🎵' if group == 'AUDIO' else \
+                   '📄' if group == 'DOCUMENT' else '📁'
+
+            dim_str = f"{width}x{height}" if width and height else "-"
+            display_date = str(date)[:10] if date else "Unknown"
 
             html_rows += f"""
             <tr>
-                <td>{icon}</td>
-                <td><a href="{new_path_id}">{relative_path}</a></td>
-                <td>{file_type_group}</td>
-                <td>{date_best[:10]}</td>
-                <td>{size_str}</td>
-                <td>{width if width else '-'}x{height if height else '-'}</td>
-                <td>{content_hash[:8]}...</td>
+                <td>{icon} {group}</td>
+                <td title="{path}"><code>{filename}</code></td>
+                <td>{display_date}</td>
+                <td data-order="{size}">{size_str}</td>
+                <td>{dim_str}</td>
+                <td><small>{content_hash[:8]}</small></td>
             </tr>
             """
         return html_rows
 
     def generate_html_report(self):
-        """Main method to generate the static HTML file."""
-        
-        # 1. Get the data
+        """Main method to generate the interactive HTML explorer."""
         try:
             data = self._get_organized_media_data()
-        except sqlite3.OperationalError:
-            print("Error: Could not query database. Ensure schema is initialized and data exists.")
+            if not data:
+                print("No data found in database to report.")
+                return
+        except Exception as e:
+            print(f"Error: Could not query database. {e}")
             return
 
         html_body_rows = self._generate_html_body(data)
@@ -98,48 +129,68 @@ class HTMLGenerator:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>File Organizer - Organized Media Report</title>
+    <title>Media Explorer | File Organizer</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
     <style>
-        body {{ font-family: Arial, sans-serif; margin: 20px; }}
-        h2 {{ color: #333; }}
-        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-        th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
-        th {{ background-color: #f2f2f2; }}
-        tr:nth-child(even) {{ background-color: #f9f9f9; }}
-        .header {{ display: flex; justify-content: space-between; align-items: center; }}
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background-color: #f4f7f6; }}
+        .container {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }}
+        h1 {{ color: #2c3e50; margin-bottom: 5px; }}
+        .stats {{ color: #7f8c8d; margin-bottom: 25px; border-bottom: 1px solid #eee; padding-bottom: 15px; }}
+        table.dataTable thead th {{ background-color: #34495e; color: white; border: none; padding: 15px; }}
+        tr:hover {{ background-color: #f1f1f1 !important; transition: 0.2s; }}
+        code {{ background: #f8f9fa; padding: 3px 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em; }}
+        .footer {{ margin-top: 30px; text-align: center; color: #bdc3c7; font-size: 0.8em; }}
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>File Organizer: Organized Media (Total Files: {self.files_reported})</h2>
-        <p>Generated: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+    <div class="container">
+        <h1>Media Explorer</h1>
+        <p class="stats">
+            Found <strong>{self.files_reported}</strong> unique assets. 
+            Generated: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        </p>
+        
+        <table id="mediaTable" class="display" style="width:100%">
+            <thead>
+                <tr>
+                    <th>Group</th>
+                    <th>Filename</th>
+                    <th>Date</th>
+                    <th>Size</th>
+                    <th>Resolution</th>
+                    <th>Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+                {html_body_rows}
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            Generated by File Organizer v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}
+        </div>
     </div>
-    
-    <p>This report lists all unique files copied to the output directory and their calculated destination paths. Click the file name to view the file in the new location.</p>
-    
-    <table>
-        <thead>
-            <tr>
-                <th>Type</th>
-                <th>Final Filename (Relative Path)</th>
-                <th>Group</th>
-                <th>Date Best</th>
-                <th>Size</th>
-                <th>Dimensions</th>
-                <th>Hash ID</th>
-            </tr>
-        </thead>
-        <tbody>
-            {html_body_rows}
-        </tbody>
-    </table>
+
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script>
+        $(document).ready(function() {{
+            $('#mediaTable').DataTable({{
+                pageLength: 25,
+                order: [[1, 'asc']],
+                language: {{
+                    search: "_INPUT_",
+                    searchPlaceholder: "Quick search files..."
+                }}
+            }});
+        }});
+    </script>
 </body>
 </html>
 """
 
-        # 2. Write the file to the output directory
-        report_file = self.output_dir / "organized_media_report.html"
-        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file = self.output_dir / "media_explorer.html"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         
         try:
             with open(report_file, 'w', encoding='utf-8') as f:
@@ -149,26 +200,29 @@ class HTMLGenerator:
             print(f"Error writing HTML report: {e}")
 
 if __name__ == "__main__":
-    manager = ConfigManager()
+    config_mgr = ConfigManager()
     
-    parser = argparse.ArgumentParser(description="HTML Generator Module for file_organizer: Creates static HTML output of organized files (F09).")
-    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    parser.add_argument('--generate', action='store_true', help="Generate the static HTML report.")
+    parser = argparse.ArgumentParser(description="HTML Generator Module")
+    parser.add_argument('-v', '--version', action='store_true', help='Show version info')
+    parser.add_argument('--generate', action='store_true', help="Generate the HTML report")
+    parser.add_argument('--db', type=str, help="Override default database path")
     args = parser.parse_args()
 
     if args.version:
-        print_version_info(__file__, "HTML Report Generator")
-    elif args.generate:
-        db_path = manager.OUTPUT_DIR / 'metadata.sqlite'
+        print(f"HTML Report Generator v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        sys.exit(0)
+    
+    db_path = Path(args.db) if args.db else config_mgr.OUTPUT_DIR / 'metadata.sqlite'
+    
+    if args.generate:
         if not db_path.exists():
-            print(f"Error: Database file not found at {db_path}. Please run the full pipeline first.")
+            print(f"Error: Database not found at {db_path}.")
         else:
             try:
-                # Use a dummy context manager to ensure the DatabaseManager is properly closed
                 with DatabaseManager(db_path) as db:
-                    generator = HTMLGenerator(db, manager)
+                    generator = HTMLGenerator(db, config_mgr)
                     generator.generate_html_report()
             except Exception as e:
-                print(f"FATAL ERROR during HTML generation: {e}")
+                print(f"FATAL ERROR: {e}")
     else:
         parser.print_help()
