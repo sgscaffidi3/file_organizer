@@ -12,10 +12,12 @@ _CHANGELOG_ENTRIES = [
     "FIX: Restored missing CLI arguments (--version, --db).",
     "FEATURE: implemented Collapsible Folder Tree using <details> tags.",
     "FEATURE: Added 'Type View' (Browse by Media/Extension).",
-    "FEATURE: Added 'Duplicates View' (Browse by Hash Collision)."
+    "FEATURE: Added 'Duplicates View' (Browse by Hash Collision).",
+    "FIX: Restored vertical scrolling (overflow-y) to Metadata Modal window.",
+    "FIX: Added explicit 'Root Directory' item in sidebar for files at base level."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.6.0
+# Version: 0.6.2
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -44,7 +46,6 @@ class HTMLGenerator:
         date_col = "mc.date_best" if "date_best" in col_names else \
                    "mc.recorded_date" if "recorded_date" in col_names else "'Unknown'"
 
-        # We need a subquery or join to get duplicate counts per hash
         query = f"""
         SELECT 
             mc.content_hash, 
@@ -68,29 +69,34 @@ class HTMLGenerator:
         folder_tree = {}
         type_tree = defaultdict(lambda: defaultdict(int))
         dupe_groups = defaultdict(list)
+        has_root_files = False
 
         for row in data:
             c_hash, group, _, rel_path, _, _, _, _, _, dupe_count = row
             ext = Path(rel_path).suffix.lower() or "no_ext"
             
-            # 1. Folder Tree
-            parts = Path(rel_path).parent.parts
-            current = folder_tree
-            for part in parts:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
+            # 1. Folder Tree Logic
+            # Check if file is at root (parent is '.' or empty)
+            parent = Path(rel_path).parent
+            if str(parent) == '.' or str(parent) == '':
+                has_root_files = True
+            else:
+                parts = parent.parts
+                current = folder_tree
+                for part in parts:
+                    if part not in current:
+                        current[part] = {}
+                    current = current[part]
 
             # 2. Type Tree
             type_tree[group][ext] += 1
 
             # 3. Duplicates (Only if count > 1)
             if dupe_count > 1:
-                # Store the primary name associated with this hash for the label
                 if c_hash not in dupe_groups:
                      dupe_groups[c_hash] = {"count": dupe_count, "name": Path(rel_path).name}
 
-        return folder_tree, type_tree, dupe_groups
+        return folder_tree, type_tree, dupe_groups, has_root_files
 
     def _render_folder_tree_html(self, tree: Dict, current_path: str = "") -> str:
         """Recursive collapsible directory tree using <details>."""
@@ -100,11 +106,9 @@ class HTMLGenerator:
             full_path = f"{current_path}/{folder}".strip("/")
             safe_path = full_path.replace("'", "\\'")
             
-            # If leaf node (no children directories), just show link
             if not subtree:
                 html += f'<li><span class="tree-item" onclick="filterTable(\'folder\', \'{safe_path}\')">📁 {folder}</span></li>'
             else:
-                # Collapsible node
                 html += f'''
                 <li>
                     <details>
@@ -130,7 +134,6 @@ class HTMLGenerator:
                     <ul>
             '''
             for ext, count in sorted(extensions.items()):
-                # Filter value: "IMAGE|.jpg" (we will split this in JS)
                 filter_val = f"{group}|{ext}"
                 html += f'<li class="tree-item" onclick="filterTable(\'type\', \'{filter_val}\')">{ext} <span class="badge-count">{count}</span></li>'
             
@@ -143,7 +146,6 @@ class HTMLGenerator:
         if not dupes: return "<p style='padding:10px; color:#888'>No duplicates found! 🎉</p>"
         
         html = '<ul class="dupe-list">'
-        # Sort by duplicate count descending
         sorted_dupes = sorted(dupes.items(), key=lambda x: x[1]['count'], reverse=True)
         
         for c_hash, info in sorted_dupes:
@@ -182,7 +184,6 @@ class HTMLGenerator:
 
             js_meta = meta_json.replace('\\', '\\\\').replace("'", "&apos;")
             
-            # Add data attributes for all filtering modes
             html_rows += f"""
             <tr data-folder="{dir_path}" data-hash="{c_hash}" data-group="{group}" data-ext="{ext}">
                 <td><span class="badge">{group}</span></td>
@@ -201,11 +202,16 @@ class HTMLGenerator:
     def generate_html_report(self):
         data = self._get_organized_media_data()
         
-        folder_tree, type_tree, dupe_groups = self._build_trees(data)
+        folder_tree, type_tree, dupe_groups, has_root = self._build_trees(data)
         
         sidebar_folders = self._render_folder_tree_html(folder_tree)
         sidebar_types = self._render_type_tree_html(type_tree)
         sidebar_dupes = self._render_dupe_tree_html(dupe_groups)
+        
+        # Inject Root Directory item if needed
+        root_html = ""
+        if has_root:
+            root_html = '<div class="tree-item" onclick="filterTable(\'folder\', \'.\')" style="color:#03dac6; margin-bottom:5px;">📂 (Root Directory)</div>'
         
         body_content = self._generate_html_body(data)
         
@@ -219,49 +225,52 @@ class HTMLGenerator:
     <style>
         body {{ font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; display: flex; height: 100vh; margin: 0; overflow: hidden; }}
         
-        /* Sidebar container */
         #sidebar {{ width: 340px; background: #1e1e1e; border-right: 1px solid #333; display: flex; flex-direction: column; flex-shrink: 0; }}
         
-        /* Tabs */
         .tab-bar {{ display: flex; border-bottom: 1px solid #333; }}
         .tab-btn {{ flex: 1; padding: 15px 0; background: #252525; color: #888; border: none; cursor: pointer; font-weight: bold; transition: 0.2s; }}
         .tab-btn:hover {{ background: #2a2a2a; color: #fff; }}
         .tab-btn.active {{ background: #1e1e1e; color: #bb86fc; border-bottom: 2px solid #bb86fc; }}
         
-        /* Sidebar Content Areas */
         .tab-content {{ flex-grow: 1; overflow-y: auto; padding: 15px; display: none; }}
         .tab-content.active {{ display: block; }}
         
-        /* Tree Styling */
         ul.tree-list, ul.type-list, ul.dupe-list {{ list-style: none; padding-left: 10px; margin: 0; }}
         details > summary {{ cursor: pointer; padding: 5px; color: #ccc; list-style: none; }}
-        details > summary::marker {{ display: none; }} /* Hide default arrow */
+        details > summary::marker {{ display: none; }}
         details > summary:hover {{ color: #fff; }}
         .tree-item {{ display: block; padding: 4px 8px; cursor: pointer; color: #888; font-size: 0.9em; }}
         .tree-item:hover {{ color: #03dac6; background: #2a2a2a; border-radius: 4px; }}
         
-        /* Duplicates List */
         .dupe-item {{ display: flex; justify-content: space-between; border-bottom: 1px solid #333; padding: 8px; }}
         .dupe-name {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }}
         
-        /* Main Area */
         #main {{ flex-grow: 1; padding: 20px; overflow-y: auto; background: #121212; }}
         .container {{ background: #1e1e1e; padding: 20px; border-radius: 12px; }}
         
-        /* Table Elements */
         table.dataTable {{ background: #1e1e1e; color: #e0e0e0; font-size: 0.9em; }}
-        .preview-img {{ max-width: 100px; max-height: 80px; border: 1px solid #444; border-radius: 4px; }}
+        .preview-img {{ max-width: 100px; max-height: 80px; border: 1px solid #444; border-radius: 4px; cursor: zoom-in; }}
         .preview-video, .preview-audio {{ width: 200px; }}
         
-        /* Badges */
         .badge {{ background: #3700b3; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; }}
         .badge-count {{ background: #333; padding: 2px 6px; border-radius: 8px; font-size: 0.8em; float: right; }}
         .badge-fail {{ background: #cf6679; color: #000; padding: 2px 6px; border-radius: 4px; font-size: 0.7em; font-weight: bold; }}
         
-        /* Modal */
         .meta-btn {{ background: #03dac6; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; }}
+        
+        /* Modal Scrolling Fix */
         .modal {{ display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); }}
-        .modal-content {{ background: #242424; margin: 5% auto; padding: 25px; width: 70%; border-radius: 10px; position: relative; }}
+        .modal-content {{ 
+            background: #242424; 
+            margin: 5% auto; 
+            padding: 25px; 
+            width: 70%; 
+            max-height: 80vh; 
+            overflow-y: auto; 
+            border-radius: 10px; 
+            position: relative; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }}
         pre {{ background: #000; color: #00ff41; padding: 15px; overflow-x: auto; font-family: monospace; }}
         .close {{ position: absolute; right: 20px; top: 15px; color: #fff; font-size: 30px; cursor: pointer; }}
     </style>
@@ -276,6 +285,7 @@ class HTMLGenerator:
 
         <div id="tab-folders" class="tab-content active">
             <div class="tree-item" onclick="filterTable('reset', '')" style="margin-bottom:10px; font-weight:bold;">🏠 Show All Files</div>
+            {root_html}
             {sidebar_folders}
         </div>
 
@@ -330,37 +340,32 @@ class HTMLGenerator:
         }}
 
         function filterTable(mode, value) {{
-            // Clear previous filters first
             $.fn.dataTable.ext.search = [];
-            
             let title = "Filtered Results";
 
             if (mode === 'reset') {{
                 title = "All Files";
-                table.search('').draw(); // Clear text search too
+                table.search('').draw();
             }} else {{
                 $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {{
                     let node = $(table.row(dataIndex).node());
-                    
                     if (mode === 'folder') {{
                         let rowFolder = node.attr('data-folder');
-                        // Match folder or any subfolder
+                        // Special handling for Root files
+                        if (value === '.') return rowFolder === '.';
                         return rowFolder === value || rowFolder.startsWith(value + "/");
                     }}
                     else if (mode === 'type') {{
-                        let parts = value.split('|'); // "IMAGE|.jpg"
-                        let rowGroup = node.attr('data-group');
-                        let rowExt = node.attr('data-ext');
-                        return rowGroup === parts[0] && rowExt === parts[1];
+                        let parts = value.split('|');
+                        return node.attr('data-group') === parts[0] && node.attr('data-ext') === parts[1];
                     }}
                     else if (mode === 'hash') {{
                         return node.attr('data-hash') === value;
                     }}
                     return true;
                 }});
-                title = (mode === 'hash') ? "Duplicate Group Inspector" : "Filtered: " + value;
+                title = (mode === 'hash') ? "Duplicate Group Inspector" : "Filtered: " + (value === '.' ? 'Root Directory' : value);
             }}
-            
             $('#view-title').text(title);
             table.draw();
         }}
@@ -402,7 +407,6 @@ if __name__ == "__main__":
         else:
             print(f"Error: Database not found at {db_path}")
     else:
-        # Default behavior if run without args (convenience)
         if db_path.exists():
             with DatabaseManager(db_path) as db:
                 HTMLGenerator(db, config_mgr).generate_html_report()
