@@ -1,17 +1,17 @@
 # ==============================================================================
 # File: base_assets.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 1
+_MINOR_VERSION = 2
 _CHANGELOG_ENTRIES = [
     "Initial creation of base_assets module with class inheritance.",
     "Implemented GenericFileAsset, AudioAsset, DocumentAsset, and ImageAsset.",
     "Standardized JSON 'backpack' across all asset types.",
     "Added project-standard versioning and CLI --version support.",
     "Added _clean_numeric helper for ImageAsset dimension scrubbing.",
-    "FEATURE: Added get_friendly_size() for dynamic unit scaling (B, KiB, MiB, GiB)."
+    "FEATURE: Added get_friendly_size() for dynamic unit scaling (B, KiB, MiB, GiB).",
+    "FEATURE: Expanded AudioAsset to capture Artist, Album, Song, VBR, and technical specs."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.1.6
 # ------------------------------------------------------------------------------
 import json
 import sys
@@ -43,11 +43,23 @@ class GenericFileAsset:
         return json.dumps(self.extended_metadata, indent=4)
 
 class AudioAsset(GenericFileAsset):
-    """Asset model for audio files (MP3, WAV, etc.)."""
+    """Asset model for audio files (MP3, WAV, FLAC, WMA, etc.)."""
     def __init__(self, file_path: Path, meta: Dict[str, Any]):
         super().__init__(file_path, meta)
-        self.duration = meta.get('Duration', "00:00:00")
-        self.bitrate = meta.get('Audio_Bit_Rate') or meta.get('Bit Rate', "Unknown")
+        
+        # Technical Metadata
+        self.duration = meta.get('Duration') or meta.get('duration', "00:00:00")
+        self.bitrate = meta.get('Bit_Rate') or meta.get('Audio_Bit_Rate') or meta.get('Bit Rate', "Unknown")
+        self.sample_rate = meta.get('Sampling_Rate') or meta.get('Sample Rate', "Unknown")
+        self.codec = meta.get('Format') or meta.get('Audio_Codec_List') or "Unknown"
+        self.bitrate_mode = meta.get('Bit_Rate_Mode') or "CBR" # Default to CBR if not specified
+        
+        # Tag Metadata
+        self.song = meta.get('Title') or meta.get('Track_Name') or self.name
+        self.artist = meta.get('Artist') or meta.get('Performer') or "Unknown Artist"
+        self.album = meta.get('Album') or "Unknown Album"
+        self.track_num = meta.get('Track_Position') or meta.get('Track_Number') or "0"
+        self.genre = meta.get('Genre', "Unknown")
 
 class ImageAsset(GenericFileAsset):
     """Asset model for images (JPG, PNG, etc.)."""
