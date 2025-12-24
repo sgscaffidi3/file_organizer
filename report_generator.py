@@ -1,5 +1,6 @@
 # ==============================================================================
 # File: report_generator.py
+# ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
 _CHANGELOG_ENTRIES = [
@@ -12,9 +13,13 @@ _CHANGELOG_ENTRIES = [
     "Added Yearly Timeline distribution.",
     "FIX: Handle 'N/A' or non-integer strings in duration and bitrate.",
     "FEATURE: Added Audio Codec and Bitrate quality tiers.",
-    "CONSOLIDATION: Merged all previous features into a single comprehensive report."
+    "CONSOLIDATION: Merged all previous features into a single comprehensive report.",
+    "UPDATE: Refactored Duplicate Audit to show top 10 largest (with --verbose toggle).",
+    "FEATURE: Added Extraction Spot-Check for largest file of each type.",
+    "FIX: Corrected get_top_duplicates query to use COUNT(*) instead of non-existent fpi.id."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.3.13
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List
@@ -62,14 +67,51 @@ class ReportGenerator:
         """, (group,))[0]
         return {"min_size": res[0], "max_size": res[1], "min_dur": res[2], "max_dur": res[3]}
 
-    def get_duplicate_list(self) -> Dict[str, List[str]]:
-        query = "SELECT content_hash, COUNT(*) as c FROM FilePathInstances GROUP BY content_hash HAVING c > 1"
+    def get_top_duplicates(self, limit: int = None) -> List[Dict]:
+        """Finds duplicate groups, sorted by size descending."""
+        # FIX: Changed COUNT(fpi.id) to COUNT(*) because the 'id' column was missing
+        query = """
+            SELECT mc.content_hash, mc.size, COUNT(*) as c 
+            FROM MediaContent mc
+            JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
+            GROUP BY mc.content_hash 
+            HAVING c > 1
+            ORDER BY mc.size DESC
+        """
+        if limit:
+            query += f" LIMIT {limit}"
+        
         dupes = self.db.execute_query(query)
-        report = {}
-        for (h, c) in dupes:
-            paths = self.db.execute_query("SELECT path FROM FilePathInstances WHERE content_hash = ?", (h,))
-            report[h] = [p[0] for p in paths]
+        report = []
+        for (h, size, c) in dupes:
+            paths = self.db.execute_query("SELECT original_relative_path FROM FilePathInstances WHERE content_hash = ?", (h,))
+            report.append({
+                "hash": h,
+                "size": size,
+                "count": c,
+                "paths": [p[0] for p in paths]
+            })
         return report
+
+    def get_extraction_samples(self) -> List[Dict]:
+        """Gets the largest file of each type to spot-check metadata extraction."""
+        query = """
+            SELECT file_type_group, content_hash, MAX(size), extended_metadata
+            FROM MediaContent
+            GROUP BY file_type_group
+        """
+        rows = self.db.execute_query(query)
+        samples = []
+        for group, h, size, meta_json in rows:
+            path_res = self.db.execute_query("SELECT original_relative_path FROM FilePathInstances WHERE content_hash = ? LIMIT 1", (h,))
+            samples.append({
+                "group": group,
+                "hash": h,
+                "size": size,
+                "path": path_res[0][0] if path_res else "Unknown",
+                "metadata": json.loads(meta_json)
+            })
+        return samples
 
     def get_video_res_summary(self) -> Dict[str, int]:
         res = {"4K+": 0, "1080p": 0, "720p": 0, "SD": 0}
@@ -95,7 +137,7 @@ class ReportGenerator:
         return res
 
     def get_audio_summary(self) -> Dict[str, Any]:
-        codecs, tiers = {}, {"Lossless (>500k)": 0, "High (256-500k)": 0, "Standard (128-256k)": 0, "Low (<128k)": 0, "Unknown": 0}
+        codecs, tiers = {"Unknown": 0}, {"Lossless (>500k)": 0, "High (256-500k)": 0, "Standard (128-256k)": 0, "Low (<128k)": 0, "Unknown": 0}
         rows = self.db.execute_query("SELECT extended_metadata FROM MediaContent WHERE file_type_group = 'AUDIO'")
         for (m_str,) in rows:
             m = json.loads(m_str)
@@ -111,7 +153,7 @@ class ReportGenerator:
             except: tiers["Unknown"] += 1
         return {"codecs": codecs, "bitrates": tiers}
 
-    def print_full_report(self):
+    def print_full_report(self, verbose_dupes: bool = False):
         print("\n" + "="*80)
         print(f" FULL MEDIA LIBRARY AUDIT (v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION})")
         print(f" Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -155,8 +197,8 @@ class ReportGenerator:
                     print(f"             Longest: {self._format_duration(ext['max_dur']):<10} | Shortest: {self._format_duration(ext['min_dur'])}")
 
         # 4. Storage & Duplicates
-        total_p = self.db.execute_query("SELECT COUNT(*) FROM FilePathInstances")[0][0]
         unique_a = self.db.execute_query("SELECT COUNT(*) FROM MediaContent")[0][0]
+        total_p = self.db.execute_query("SELECT COUNT(*) FROM FilePathInstances")[0][0]
         foot_res = self.db.execute_query("SELECT SUM(m.size) FROM FilePathInstances f JOIN MediaContent m ON f.content_hash = m.content_hash")[0][0] or 0
         uniq_res = self.db.execute_query("SELECT SUM(size) FROM MediaContent")[0][0] or 0
         
@@ -164,23 +206,40 @@ class ReportGenerator:
         print(f"  Unique Assets:   {unique_a:,} ({self._format_size(uniq_res)})")
         print(f"  Redundant Paths: {total_p - unique_a:,} ({self._format_size(foot_res - uniq_res)})")
 
-        dupe_map = self.get_duplicate_list()
-        if dupe_map:
-            print("\n[DUPLICATE PATH AUDIT]")
-            for h, paths in dupe_map.items():
-                print(f"  Hash: {h[:16]}...")
-                for p in paths: print(f"    - {p}")
+        limit = None if verbose_dupes else 10
+        dupe_list = self.get_top_duplicates(limit=limit)
+        
+        if dupe_list:
+            header = "\n[DUPLICATE PATH AUDIT]" if verbose_dupes else f"\n[DUPLICATE PATH AUDIT - TOP 10 LARGEST]"
+            print(header)
+            for item in dupe_list:
+                print(f"  Hash: {item['hash'][:16]}... | Size: {self._format_size(item['size'])}")
+                for p in item['paths']: print(f"    - {p}")
+
+        # 5. Extraction Spot-Check
+        print("\n" + "="*80)
+        print(f"{'METADATA EXTRACTION SPOT-CHECK (Largest per Group)':^80}")
+        print("="*80)
+        for sample in self.get_extraction_samples():
+            print(f"\n--- Group: {sample['group']} ---")
+            print(f"  Path: {sample['path']}")
+            print(f"  Size: {self._format_size(sample['size'])}")
+            print(f"  JSON Data:")
+            print(json.dumps(sample['metadata'], indent=6))
 
         print("\n" + "="*80 + "\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('-v', '--verbose', action='store_true', help="Print all duplicates instead of top 10")
+    parser.add_argument('--version', action='store_true')
     parser.add_argument('--db', type=str, default="demo/metadata.sqlite")
     args = parser.parse_args()
+    
     if args.version:
         print(f"Report Generator v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)
+        
     db = DatabaseManager(args.db)
     with db:
-        ReportGenerator(db).print_full_report()
+        ReportGenerator(db).print_full_report(verbose_dupes=args.verbose)
