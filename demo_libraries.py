@@ -1,12 +1,14 @@
 # ==============================================================================
 # File: demo_libraries.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 3
 _CHANGELOG_ENTRIES = [
     "Initial creation and evolution of demo suite.",
-    "Integrated DatabaseManager for persistence in 'demo/metadata.sqlite'.",
+    "Integrated DatabaseManager for persistence.",
     "Implemented Smart Update logic with field-level change detection.",
-    "Added --debug option to restore exhaustive line-by-line metadata printing."
+    "Added --debug option for exhaustive metadata printing.",
+    "FEATURE: Implemented Nested Progress Bars (Overall + Per-File Hashing).",
+    "RESTORED: --version support and fixed execution flow."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
@@ -16,6 +18,7 @@ import json
 import hashlib
 from pathlib import Path
 from PIL import Image
+from tqdm import tqdm
 
 # Ensure project root is in path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -30,11 +33,17 @@ TEST_ASSETS_DIR = Path("test_assets")
 DEMO_OUTPUT_DIR = Path("demo")
 DEMO_DB_PATH = DEMO_OUTPUT_DIR / "metadata.sqlite"
 
-def calculate_file_hash(file_path: Path) -> str:
+def calculate_file_hash_with_progress(file_path: Path, pbar_inner: tqdm) -> str:
+    """Calculates MD5 hash while updating the per-file progress bar."""
     hash_md5 = hashlib.md5()
+    file_size = file_path.stat().st_size
+    pbar_inner.reset(total=file_size)
+    pbar_inner.set_description(f"  Hashing: {file_path.name[:20]}...")
+    
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
+        for chunk in iter(lambda: f.read(1024 * 1024), b""): # 1MB chunks
             hash_md5.update(chunk)
+            pbar_inner.update(len(chunk))
     return hash_md5.hexdigest()
 
 def get_existing_metadata(db: DatabaseManager, content_hash: str) -> dict:
@@ -42,62 +51,54 @@ def get_existing_metadata(db: DatabaseManager, content_hash: str) -> dict:
     return json.loads(res[0][0]) if res else None
 
 def compare_metadata(old_meta: dict, new_meta: dict) -> list:
+    """Compares two metadata dicts and returns a list of differences."""
     diffs = []
     for k, v in new_meta.items():
         if k not in old_meta:
             diffs.append(f"Added {k}")
         elif str(old_meta[k]) != str(v):
-            diffs.append(f"{k}: '{old_meta[k]}' -> '{v}'")
+            diffs.append(f"{k} changed")
     return diffs
 
 def run_demo():
-    parser = argparse.ArgumentParser(description="Demonstrates external library usage and DB persistence.")
-    parser.add_argument('-v', '--version', action='store_true')
-    parser.add_argument('--verbose', action='store_true', help='Extract exhaustive MediaInfo streams.')
-    parser.add_argument('--debug', action='store_true', help='Print full metadata to console for every file.')
+    parser = argparse.ArgumentParser(description="Demonstrates nested progress bars and DB persistence.")
+    parser.add_argument('-v', '--version', action='store_true', help='Show version info.')
+    parser.add_argument('--debug', action='store_true', help='Print full metadata to console.')
     args = parser.parse_args()
 
+    # --- RESTORED VERSION SUPPORT ---
     if args.version:
         print(f"Demo Libraries v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)
 
-    print("=" * 60)
-    print("EXTERNAL LIBRARY FEATURE DEMONSTRATION & DB PERSISTENCE")
-    if args.debug: print("DEBUG MODE: ENABLED (Exhaustive Printing)")
-    print("=" * 60)
-    
     DEMO_OUTPUT_DIR.mkdir(exist_ok=True)
     db = DatabaseManager(str(DEMO_DB_PATH))
     db.create_schema()
 
     if not TEST_ASSETS_DIR.exists():
-        print(f"\nERROR: '{TEST_ASSETS_DIR}' directory not found.")
+        print(f"ERROR: '{TEST_ASSETS_DIR}' not found.")
         return
 
     asset_files = list(TEST_ASSETS_DIR.glob("*.*"))
-    versions = get_library_versions()
-    use_tqdm = versions.get('tqdm') != "Not Installed"
     
-    if use_tqdm:
-        from tqdm import tqdm
-        iterator = tqdm(asset_files, desc="Processing Assets")
-    else:
-        iterator = asset_files
-    
+    # Progress Bar Initialization
+    pbar_outer = tqdm(total=len(asset_files), desc="OVERALL PROGRESS", position=0, leave=True)
+    pbar_inner = tqdm(total=0, desc="  FILE PROGRESS   ", position=1, leave=False, unit='B', unit_scale=True)
+
     stats = {"new": 0, "updated": 0, "skipped": 0}
 
     with db:
-        for file_path in iterator:
+        for file_path in asset_files:
             ext = file_path.suffix.lower()
             asset = None
             media_group = "UNKNOWN"
             
             try:
-                content_hash = calculate_file_hash(file_path)
+                content_hash = calculate_file_hash_with_progress(file_path, pbar_inner)
                 file_stats = file_path.stat()
                 raw_meta = {"OS_File_Size": file_stats.st_size}
 
-                # Identification & Class Assignment
+                # Identification & Asset Class Creation
                 if ext in ['.jpg', '.jpeg', '.png', '.bmp']:
                     media_group = "IMAGE"
                     with Image.open(file_path) as img:
@@ -105,70 +106,46 @@ def run_demo():
                         asset = ImageAsset(file_path, raw_meta)
                 elif ext in ['.mp4', '.avi', '.mov', '.mkv', '.wmv']:
                     media_group = "VIDEO"
-                    extracted = get_video_metadata(file_path, verbose=args.verbose)
+                    extracted = get_video_metadata(file_path)
                     extracted.update(raw_meta)
                     asset = VideoAsset(file_path, extracted)
                 else:
                     media_group = "GENERIC"
                     asset = GenericFileAsset(file_path, raw_meta)
 
-                # Inject friendly size for DB storage
-                asset.extended_metadata['Friendly_Size'] = asset.get_friendly_size()
-                
-                # --- DEBUG PRINTING ---
-                if args.debug:
-                    meta_to_show = json.loads(asset.get_full_json())
-                    debug_header = f"\n[{media_group}] {file_path.name}"
-                    if use_tqdm: tqdm.write(debug_header) 
-                    else: print(debug_header)
-                    
-                    for key, value in meta_to_show.items():
-                        # Truncate long values for terminal readability
-                        val_str = str(value)[:70] + "..." if len(str(value)) > 73 else str(value)
-                        line = f"    {key:<20}: {val_str}"
-                        if use_tqdm: tqdm.write(line)
-                        else: print(line)
-
-                # --- DATABASE LOGIC ---
+                # Metadata Comparison & DB Persistence
                 old_meta = get_existing_metadata(db, content_hash)
+                new_meta_json = asset.get_full_json()
+                
                 if old_meta is None:
                     stats['new'] += 1
-                    status_msg = f"[NEW] {file_path.name}"
                     db.execute_query("""
                         INSERT INTO MediaContent (content_hash, size, file_type_group, width, height, duration, video_codec, extended_metadata)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (content_hash, asset.size_bytes, media_group, getattr(asset, 'width', 0), 
                           getattr(asset, 'height', 0), getattr(asset, 'duration', 0), 
-                          getattr(asset, 'video_codec', "N/A"), asset.get_full_json()))
+                          getattr(asset, 'video_codec', "N/A"), new_meta_json))
                 else:
-                    new_meta = json.loads(asset.get_full_json())
-                    diffs = compare_metadata(old_meta, new_meta)
+                    diffs = compare_metadata(old_meta, json.loads(new_meta_json))
                     if diffs:
                         stats['updated'] += 1
-                        status_msg = f"[UPDATE] {file_path.name}: {', '.join(diffs[:2])}..."
-                        db.execute_query("""
-                            UPDATE MediaContent SET extended_metadata = ?, width = ?, height = ? WHERE content_hash = ?
-                        """, (asset.get_full_json(), getattr(asset, 'width', 0), getattr(asset, 'height', 0), content_hash))
+                        db.execute_query("UPDATE MediaContent SET extended_metadata = ? WHERE content_hash = ?", (new_meta_json, content_hash))
                     else:
                         stats['skipped'] += 1
-                        status_msg = None # Don't spam if nothing happened
 
-                if status_msg and not args.debug: # Only show status msg if debug isn't already printing everything
-                    if use_tqdm: tqdm.write(status_msg)
-                    else: print(status_msg)
-
-                # Ensure path instance
+                # Ensure path instance is recorded
                 db.execute_query("INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path) VALUES (?, ?, ?, ?)",
                                 (content_hash, str(file_path), str(file_path.resolve()), file_path.name))
 
             except Exception as e:
-                err_msg = f"[ERROR] {file_path.name}: {e}"
-                if use_tqdm: tqdm.write(err_msg)
-                else: print(err_msg)
+                pbar_outer.write(f"[ERROR] {file_path.name}: {e}")
 
-    print(f"\n--- Demo Complete ---")
-    print(f"New: {stats['new']} | Updated: {stats['updated']} | Unchanged: {stats['skipped']}")
-    print(f"Run Report: python report_generator.py --db {DEMO_DB_PATH}")
+            pbar_outer.update(1)
+
+    pbar_inner.close()
+    pbar_outer.close()
+    print(f"\n--- Scan Complete ---")
+    print(f"New Assets: {stats['new']} | Updated: {stats['updated']} | Skipped: {stats['skipped']}")
 
 if __name__ == '__main__':
     run_demo()
