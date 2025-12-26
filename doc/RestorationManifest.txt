@@ -1,0 +1,21 @@
+CONTEXT & CONSTRAINTS FOR html_generator.py (v0.6.21):
+
+1. **CLI Requirements:**
+   - Must support: `-v/--version`, `--db [path]`, and `--generate`.
+   - CRITICAL: If no arguments are provided, the script MUST run generation by default.
+
+2. **String Handling (Anti-Crash Rules):**
+   - DO NOT use f-strings or `.format()` for the final HTML assembly. The CSS/JS contains `{}` and `\` which causes Python to crash.
+   - USE: Simple string concatenation (`html = top + css + body + js`).
+   - DO NOT put backslashes inside f-string expressions (e.g., `f"{path.replace('\\', '/')}"` is illegal syntax).
+
+3. **Metadata Modal Logic:**
+   - DO NOT inject raw JSON into `onclick="..."`. This breaks on quotes.
+   - USE: HTML5 data attributes. Store JSON in `data-meta='...'` on the button, and use `btn.getAttribute('data-meta')` in the JavaScript.
+
+4. **Sidebar Structure:**
+   - Must maintain the 3-tab system: "Folders", "Types", "Duplicates".
+   - Must include logic for "Root Directory" (files with no parent folder).
+
+5. **Current State:**
+   - The script is currently functioning with these rules. Do not "simplify" these specific architectural choices.
