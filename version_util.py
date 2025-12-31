@@ -34,10 +34,11 @@ VERSION_CHECK_FILES = [
     "metadata_processor.py",
     "migrator.py",
     "report_generator.py",
-    "libraries_helper.py",        # <--- NEW FILE
-    "demo_libraries.py",          # <--- NEW FILE
+    "libraries_helper.py",
+    "demo_libraries.py",
     "asset_manager.py",
     "video_asset.py",
+    "base_assets.py",
     
     # Test files are in a 'test' subdirectory
     "test/test_all.py",
