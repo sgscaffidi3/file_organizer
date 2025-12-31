@@ -3,7 +3,6 @@
 # ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 6
-_REMOVED_CHANGELOG_COUNT = 0 
 _CHANGELOG_ENTRIES = [
     "Initial implementation of HTMLGenerator class.",
     "Added DataTables integration and Metadata Inspector.",
@@ -19,7 +18,6 @@ _CHANGELOG_ENTRIES = [
     "FIX: Added JS safety checks to metadata modal to prevent 'silent' failures.",
     "FIX: Added 'formatSize' utility to metadata inspector for human-readable sizes.",
     "FIX: Added video playback fallback message for browser/CORS compatibility issues.",
-    "VERSIONING: Added _REMOVED_CHANGELOG_COUNT to prevent version regression.",
     "FIX: Resolved SyntaxError by removing f-string escaping issues in HTML generation.",
     "FIX: Restored missing --generate CLI argument and generation logic.",
     "FIX: Resolved ValueError by separating CSS/JS from .format() template parsing.",
@@ -27,7 +25,7 @@ _CHANGELOG_ENTRIES = [
     "FIX: Replaced onclick data-passing with HTML5 data-attributes to fix Metadata Modal.",
     "FIX: Resolved f-string backslash SyntaxError and restored missing sidebar variables."
 ]
-_PATCH_VERSION = len(_CHANGELOG_ENTRIES) + _REMOVED_CHANGELOG_COUNT
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict
