@@ -2,10 +2,6 @@
 # File: test_all.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 25
-# Version: <Automatically calculated via dynamic import of target module>
-# ------------------------------------------------------------------------------
-# CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "Refactored to act as the primary test runner by default (no flag).",
     "Added encoding='utf-8' to run_version_check to fix decoding issues.",
@@ -21,9 +17,12 @@ _CHANGELOG_ENTRIES = [
     "READABILITY IMPROVEMENT: Modified format_results_table to dynamically calculate column widths and use string padding for consistent, aligned output in the detailed report table.",
     "VISUAL FIX: Refined column width calculation and separator line generation in format_results_table to ensure perfect alignment of all pipe characters (|) in the console output.",
     "VISUAL FIX: Corrected f-string padding logic to ensure the separator line uses the exact same calculated total width as the header and data rows, fixing final pipe alignment.",
-    "VISUAL FIX: Applied dynamic column width calculation and padding to the Summary Table for improved console alignment and readability."
-    "FEATURE: Added 'test_libraries' to the test suite and updated version audit list."
+    "VISUAL FIX: Applied dynamic column width calculation and padding to the Summary Table for improved console alignment and readability.",
+    "FEATURE: Added 'test_libraries' to the test suite and updated version audit list.",
+    "FEATURE: Added 'test_migrator' to the test suite and updated version audit list."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.3.27
 # ------------------------------------------------------------------------------
 import subprocess
 from pathlib import Path
@@ -40,7 +39,8 @@ TEST_MODULES = [
     "test_metadata_processor",
     "test_deduplicator",
     "test_libraries",
-    "test_assets"
+    "test_assets",
+    "test_migrator" # <--- ADDED
 ]
 
 # List of files to check for the --get_versions functionality
@@ -56,8 +56,11 @@ VERSION_CHECK_FILES = [
     "migrator.py",
     "report_generator.py",
     "version_util.py",
-    "libraries_helper.py",  # <--- ADD THIS LINE
-    "demo_libraries.py",    # <--- ADD THIS LINE
+    "libraries_helper.py",  
+    "demo_libraries.py",    
+    "asset_manager.py",
+    "video_asset.py",
+    "base_assets.py",
     # Test files
     "test/test_all.py",
     "test/test_database_manager.py",
@@ -65,7 +68,8 @@ VERSION_CHECK_FILES = [
     "test/test_file_scanner.py",
     "test/test_metadata_processor.py",
     "test/test_libraries.py",
-    "test/test_assets.py"
+    "test/test_assets.py",
+    "test/test_migrator.py" # <--- ADDED
 ]
 
 # ==============================================================================
