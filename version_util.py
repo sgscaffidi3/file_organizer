@@ -16,7 +16,8 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL FIX: Updated VERSION_CHECK_FILES to correctly locate test files within the 'test' subdirectory, resolving FILE NOT FOUND errors during audit.",
     "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output to 40 characters for cleaner display of long test file names.",
     "Updated VERSION_CHECK_FILES to include new utility and test files: `libraries_helper.py`, `demo_libraries.py`, and `test/test_libraries.py`.",
-    "Updated VERSION_CHECK_FILES to include `test/test_migrator.py`."
+    "Updated VERSION_CHECK_FILES to include `test/test_migrator.py`.",
+    "Updated VERSION_CHECK_FILES to include `test/test_type_coverage.py`."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: <Automatically calculated via dynamic import of target module>
@@ -49,7 +50,8 @@ VERSION_CHECK_FILES = [
     "test/test_metadata_processor.py",
     "test/test_libraries.py",
     "test/test_assets.py",
-    "test/test_migrator.py"
+    "test/test_migrator.py",
+    "test/test_type_coverage.py"
 ]
 
 from pathlib import Path
