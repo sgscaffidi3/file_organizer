@@ -19,10 +19,11 @@ _CHANGELOG_ENTRIES = [
     "VISUAL FIX: Corrected f-string padding logic to ensure the separator line uses the exact same calculated total width as the header and data rows, fixing final pipe alignment.",
     "VISUAL FIX: Applied dynamic column width calculation and padding to the Summary Table for improved console alignment and readability.",
     "FEATURE: Added 'test_libraries' to the test suite and updated version audit list.",
-    "FEATURE: Added 'test_migrator' to the test suite and updated version audit list."
+    "FEATURE: Added 'test_migrator' to the test suite and updated version audit list.",
+    "FEATURE: Added 'test_type_coverage' to the test suite (TDD Red Phase)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.3.27
+# Version: 0.3.28
 # ------------------------------------------------------------------------------
 import subprocess
 from pathlib import Path
@@ -40,7 +41,8 @@ TEST_MODULES = [
     "test_deduplicator",
     "test_libraries",
     "test_assets",
-    "test_migrator" # <--- ADDED
+    "test_migrator",
+    "test_type_coverage" # <--- ADDED
 ]
 
 # List of files to check for the --get_versions functionality
@@ -69,7 +71,8 @@ VERSION_CHECK_FILES = [
     "test/test_metadata_processor.py",
     "test/test_libraries.py",
     "test/test_assets.py",
-    "test/test_migrator.py" # <--- ADDED
+    "test/test_migrator.py",
+    "test/test_type_coverage.py" # <--- ADDED
 ]
 
 # ==============================================================================
