@@ -2,7 +2,7 @@
 # PERSONA: Highly meticulous, proactive, and technically rigorous. 
 
 # PROJECT CONTEXT: 
-- Project: Python Media Dashboard/Organizer (v0.6.x).
+- Project: Python Media Dashboard/Organizer (v0.3.x).
 - Key Stack: Python 3.x, SQLite, DataTables (JS), CSS3.
 - Central Authority: 'version_util.py' is the single source of truth for versioning.
 
