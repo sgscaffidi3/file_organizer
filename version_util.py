@@ -2,8 +2,6 @@
 # File: version_util.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 11
-# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -17,8 +15,11 @@ _CHANGELOG_ENTRIES = [
     "Added --get_all command to audit the version and format status of all files.",
     "CRITICAL FIX: Updated VERSION_CHECK_FILES to correctly locate test files within the 'test' subdirectory, resolving FILE NOT FOUND errors during audit.",
     "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output to 40 characters for cleaner display of long test file names.",
-    "Updated VERSION_CHECK_FILES to include new utility and test files: `libraries_helper.py`, `demo_libraries.py`, and `test/test_libraries.py`."
+    "Updated VERSION_CHECK_FILES to include new utility and test files: `libraries_helper.py`, `demo_libraries.py`, and `test/test_libraries.py`.",
+    "Updated VERSION_CHECK_FILES to include `test/test_migrator.py`."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 
 # List of all files to check for project-wide version status.
@@ -46,8 +47,9 @@ VERSION_CHECK_FILES = [
     "test/test_deduplicator.py",
     "test/test_file_scanner.py",
     "test/test_metadata_processor.py",
-    "test/test_libraries.py",     # <--- NEW TEST FILE
-    "test/test_assets.py"
+    "test/test_libraries.py",
+    "test/test_assets.py",
+    "test/test_migrator.py"
 ]
 
 from pathlib import Path
