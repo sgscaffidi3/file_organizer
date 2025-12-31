@@ -5,6 +5,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.sqlite
+*.html
+*.htm
 
 # C extensions
 *.so
