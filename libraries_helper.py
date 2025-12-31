@@ -2,8 +2,6 @@
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 15
-# Version: 0.3.15
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -22,8 +20,11 @@ _CHANGELOG_ENTRIES = [
     "BUG FIX: Fixed 'Data' object attribute error by using direct item access and exportPlaintext.",
     "EVOLUTION: Integrated MediaInfo for professional-grade and dynamic metadata extraction.",
     "CLI: Added --verbose argument to toggle between standard and exhaustive MediaInfo extraction.",
-    "SYNC: Refined internal logic to support external calls for verbose vs standard metadata."
+    "SYNC: Refined internal logic to support external calls for verbose vs standard metadata.",
+    "BUG FIX: Changed file size extraction to return raw integers instead of formatted strings to prevent processing errors in Asset models."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.3.17
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -109,7 +110,11 @@ def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
     # 1. OS-Level Stats
     try:
         stats = file_path.stat()
-        results["OS_File_Size"] = f"{stats.st_size / (1024**3):.2f} GiB"
+        # FIX: Return raw integer bytes for calculation logic
+        results["OS_File_Size"] = stats.st_size
+        # Readable string moved to separate key if needed for display later
+        results["OS_File_Size_Readable"] = f"{stats.st_size / (1024**3):.2f} GiB"
+        
         results["OS_Date_Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
         results["OS_Date_Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
     except Exception as e:
@@ -156,7 +161,8 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
     # OS Level Stats
     try:
         stats = file_path.stat()
-        results["File Size"] = f"{stats.st_size / (1024**3):.2f} GiB"
+        # FIX: Return raw integer bytes
+        results["File Size"] = stats.st_size
         results["Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
         results["Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
     except Exception as e:

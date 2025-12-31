@@ -9,7 +9,8 @@ _CHANGELOG_ENTRIES = [
     "Added project-standard versioning and CLI --version support.",
     "Added _clean_numeric helper for ImageAsset dimension scrubbing.",
     "FEATURE: Added get_friendly_size() for dynamic unit scaling (B, KiB, MiB, GiB).",
-    "FEATURE: Expanded AudioAsset to capture Artist, Album, Song, VBR, and technical specs."
+    "FEATURE: Expanded AudioAsset to capture Artist, Album, Song, VBR, and technical specs.",
+    "BUG FIX: Added 'camera' attribute to ImageAsset to capture Make/Model metadata (Fixes test_assets error)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
@@ -25,7 +26,14 @@ class GenericFileAsset:
         self.path = file_path
         self.name = file_path.name
         # Store the raw bytes for calculations
-        self.size_bytes = int(meta.get('OS_File_Size') or meta.get('File Size', 0))
+        # Helper ensures we handle both raw ints and string representations cleanly if needed, 
+        # though upstream should provide ints.
+        raw_size = meta.get('OS_File_Size') or meta.get('File Size', 0)
+        try:
+            self.size_bytes = int(raw_size)
+        except (ValueError, TypeError):
+            self.size_bytes = 0
+            
         self.recorded_date = meta.get('Recorded_Date') or meta.get('OS_Date_Created', "Unknown")
         self.extended_metadata = meta
 
@@ -67,6 +75,8 @@ class ImageAsset(GenericFileAsset):
         super().__init__(file_path, meta)
         self.width = self._clean_numeric(meta.get('Width', 0))
         self.height = self._clean_numeric(meta.get('Height', 0))
+        # Captures camera info for detailed reporting
+        self.camera = meta.get('Make') or meta.get('Model') or "Unknown Camera"
 
     def _clean_numeric(self, value: Any) -> int:
         try:
