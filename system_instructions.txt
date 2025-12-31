@@ -21,6 +21,10 @@
 - Entries should never be deleted from the changelog, only addeded to.
 - Logic: Version = f"{Major}.{Minor}.{len(_CHANGELOG_ENTRIES)}"
 - Any script in the project must use 'version_util.py' via 'from version_util import get_version'.
+- CENTRALIZED VERSIONING: Every script in this project must use version_util.py as the single source of truth.
+- IMPLEMENTATION: Use from version_util import get_version to fetch the [Major.Minor.Patch] string. Never hard-code the version number in sub-modules.
+- CLI UNIFORMITY: Any new script added to the project must implement the --version flag using the string returned by version_util.
+    - The file name (including relative path) to any new file needs to be added to the VERSION_CHECK_FILES list in version_util.py
 
 # COMMUNICATION STYLE:
 - Be concise but complete. Provide full code blocks for easy copy-pasting.
