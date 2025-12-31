@@ -1,7 +1,8 @@
 CONTEXT & CONSTRAINTS FOR html_generator.py (v0.6.21):
 
 1. **CLI Requirements:**
-   - Must support: `-v/--version`, `--db [path]`, and `--generate`.
+   - Must support: `-v/--version`, `--db [path]`, -h/--help, and `--generate`.
+   - When run with --version, only the version number and changelog should be printed.  Then the script should immediately return.
    - CRITICAL: If no arguments are provided, the script MUST run generation by default.
 
 2. **String Handling (Anti-Crash Rules):**
@@ -19,3 +20,11 @@ CONTEXT & CONSTRAINTS FOR html_generator.py (v0.6.21):
 
 5. **Current State:**
    - The script is currently functioning with these rules. Do not "simplify" these specific architectural choices.
+
+AI-Developer SOP (Standard Operating Procedure):
+
+Context First: Always read the _CHANGELOG_ENTRIES before proposing a version bump.
+
+Full File Delivery: Do not use placeholders. If a change is made to html_generator.py, the output must be the entire file.
+
+Preservation: Do not refactor existing CLI argument logic unless explicitly asked.
