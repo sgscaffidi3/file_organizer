@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -21,12 +21,13 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`.",
     "FEATURE: Added dump_database() method and --dump_db CLI option for quick debugging inspection.",
     "SCHEMA MIGRATION: Added auto-detection and creation of 'new_path_id' column if missing (Fixes Deduplicator crash on legacy DBs).",
-    "PERFORMANCE: Added Indices for content_hash and is_primary to eliminate full-table scans during deduplication."
+    "PERFORMANCE: Added Indices for content_hash and is_primary to eliminate full-table scans during deduplication.",
+    "PERFORMANCE: Added execute_many() method to support high-speed batch updates."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
 import sqlite3
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Any
 import os
 import sys
 import argparse
@@ -72,8 +73,7 @@ class DatabaseManager:
 
     def execute_query(self, query: str, params: Optional[Tuple] = None) -> List[Tuple] | int:
         """
-        Executes a query. Commits changes for non-SELECT queries.
-        Returns results for SELECT queries, or rowcount for others.
+        Executes a single query.
         """
         if not self.conn:
             self.connect()
@@ -89,16 +89,32 @@ class DatabaseManager:
             if query.strip().upper().startswith('SELECT'):
                 # Return results for SELECT
                 result = cursor.fetchall()
-                # Ensure a list is always returned
                 return result if result is not None else []
             else:
-                # For INSERT/UPDATE/DELETE, commit and return the number of rows affected/inserted
+                # For INSERT/UPDATE/DELETE, commit
                 self.conn.commit()
                 return cursor.rowcount
                 
         except sqlite3.Error as e:
             if self.conn and not query.strip().upper().startswith('SELECT'):
                 self.conn.rollback()
+            raise e
+
+    def execute_many(self, query: str, params_list: List[Tuple]) -> int:
+        """
+        Executes the same query for many sets of parameters.
+        Highly optimized for bulk updates/inserts.
+        """
+        if not self.conn:
+            self.connect()
+            
+        cursor = self.conn.cursor()
+        try:
+            cursor.executemany(query, params_list)
+            self.conn.commit()
+            return cursor.rowcount
+        except sqlite3.Error as e:
+            self.conn.rollback()
             raise e
     
     def create_schema(self):
@@ -149,8 +165,7 @@ class DatabaseManager:
         );
         """
         
-        # Indices for Performance (Fix for slow deduplication)
-        # SQLite does not auto-index foreign keys. We must do it manually.
+        # Indices for Performance
         index_hash_sql = "CREATE INDEX IF NOT EXISTS idx_fpi_content_hash ON FilePathInstances(content_hash);"
         index_primary_sql = "CREATE INDEX IF NOT EXISTS idx_fpi_is_primary ON FilePathInstances(is_primary);"
         
@@ -162,7 +177,6 @@ class DatabaseManager:
             try:
                 self.conn.execute("ALTER TABLE MediaContent ADD COLUMN new_path_id TEXT;")
             except sqlite3.OperationalError:
-                # Column likely already exists, ignore error
                 pass
                 
             # Create Indices
@@ -225,12 +239,10 @@ class DatabaseManager:
 
 # --- CLI EXECUTION LOGIC ---
 if __name__ == '__main__':
-    
     parser = argparse.ArgumentParser(description="Database Manager Utility")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
     parser.add_argument('--dump_db', action='store_true', help='Dump the contents of the database to stdout.')
     parser.add_argument('--db', type=str, default=r"organized_media_output/metadata.sqlite", help='Path to the database file (default: organized_media_output/metadata.sqlite)')
-    
     args = parser.parse_args()
 
     if args.version:
