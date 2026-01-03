@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 5
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -20,7 +20,8 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL API FIX: Updated `execute_query` to return the `rowcount` for non-SELECT queries.",
     "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`.",
     "FEATURE: Added dump_database() method and --dump_db CLI option for quick debugging inspection.",
-    "SCHEMA MIGRATION: Added auto-detection and creation of 'new_path_id' column if missing (Fixes Deduplicator crash on legacy DBs)."
+    "SCHEMA MIGRATION: Added auto-detection and creation of 'new_path_id' column if missing (Fixes Deduplicator crash on legacy DBs).",
+    "PERFORMANCE: Added Indices for content_hash and is_primary to eliminate full-table scans during deduplication."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
@@ -148,6 +149,11 @@ class DatabaseManager:
         );
         """
         
+        # Indices for Performance (Fix for slow deduplication)
+        # SQLite does not auto-index foreign keys. We must do it manually.
+        index_hash_sql = "CREATE INDEX IF NOT EXISTS idx_fpi_content_hash ON FilePathInstances(content_hash);"
+        index_primary_sql = "CREATE INDEX IF NOT EXISTS idx_fpi_is_primary ON FilePathInstances(is_primary);"
+        
         try:
             self.conn.execute(content_table_sql)
             self.conn.execute(instance_table_sql)
@@ -158,6 +164,10 @@ class DatabaseManager:
             except sqlite3.OperationalError:
                 # Column likely already exists, ignore error
                 pass
+                
+            # Create Indices
+            self.conn.execute(index_hash_sql)
+            self.conn.execute(index_primary_sql)
                 
             self.conn.commit()
         except sqlite3.Error as e:
