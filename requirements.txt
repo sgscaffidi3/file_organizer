@@ -3,20 +3,17 @@
 # Dependencies required to run the File Organizer project.
 # ==============================================================================
 
-# Core Utility Dependencies
-# Tqdm is highly recommended for adding progress bars to scanning and processing
-# phases for a better user experience on large datasets.
+# Core Utility
 tqdm
 
-# Metadata Extraction Dependencies (Functional Requirement F04)
-# Pillow (PIL) is the standard library for processing image metadata (EXIF, IPTC,
-# and size/dimensions) and fulfilling F04 for image files.
+# Metadata Extraction
 Pillow
-
-# Hachoir is used for extracting metadata from video and binary files (F04).
+pymediainfo>=6.1.0
 hachoir
 
-# Bitstream Extraction (for stubborn AVI/MP4 headers)
-opencv-python>=4.9.0.80
-
-pymediainfo>=6.1.0
+# Documents & Archives (New Support)
+PyPDF2
+python-docx
+openpyxl
+EbookLib
+# Note: zipfile and tarfile are standard python libs
