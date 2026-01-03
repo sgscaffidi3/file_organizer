@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: file_scanner.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
     "Initial implementation of high-performance file hashing and scanning logic (F01).",
     "Implemented incremental hashing using SHA256 (N01).",
@@ -14,13 +14,16 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL FIX: Explicitly listed all column names in the FilePathInstances INSERT OR IGNORE statement to ensure SQLite correctly enforces the UNIQUE constraint on the 'path' column.",
     "DEFINITIVE FIX: Re-verified the explicit column listing in FilePathInstances INSERT OR IGNORE to ensure SQLite's UNIQUE constraint on 'path' is enforced.",
     "CRITICAL TEST FIX: Modified the insertion logic in `scan_and_insert` to ensure `self.files_inserted_count` is incremented accurately.",
-    "UX: Added TQDM progress bar for real-time scanning feedback."
+    "UX: Added TQDM progress bar for real-time scanning feedback.",
+    "REVERT: Removed nested byte-level progress bar as per user request.",
+    "PERFORMANCE: Implemented RAM Cache for _check_if_known_and_unchanged to enable Fast Resume.",
+    "UX: Re-implemented Nested Byte-Level Progress Bar for large file visibility."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.12
+# Version: 0.6.15
 # ------------------------------------------------------------------------------
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 import os
 import hashlib
 import datetime
@@ -34,7 +37,6 @@ from config_manager import ConfigManager
 from version_util import print_version_info
 import config 
 
-# Define file type groups based on common extensions (ConfigManager manages this, but define a fallback)
 DEFAULT_FILE_GROUPS: Dict[str, List[str]] = {
     'IMAGE': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff'],
     'VIDEO': ['.mp4', '.mov', '.avi', '.mkv', '.wmv'],
@@ -53,6 +55,7 @@ class FileScanner:
         self.file_groups = file_groups
         self.files_scanned_count = 0
         self.files_inserted_count = 0
+        self.known_files_cache: Dict[str, Tuple[str, int]] = {} # Path -> (date_modified, size)
 
     def _get_file_type_group(self, file_path: Path) -> str:
         """Determines the file group (e.g., IMAGE, VIDEO) based on the extension."""
@@ -62,64 +65,85 @@ class FileScanner:
                 return group
         return 'OTHER'
 
-    def _calculate_sha256(self, file_path: Path) -> str:
-        """Calculates the SHA256 hash incrementally."""
+    def _load_cache(self):
+        """Pre-loads existing file paths from DB into memory for instant skip checks."""
+        print("Loading existing file index for fast resume...")
+        # Join to get size from MediaContent
+        query = """
+        SELECT fpi.path, fpi.date_modified, mc.size 
+        FROM FilePathInstances fpi
+        JOIN MediaContent mc ON fpi.content_hash = mc.content_hash
+        """
+        try:
+            rows = self.db.execute_query(query)
+            for path, date_mod, size in rows:
+                self.known_files_cache[path] = (date_mod, size)
+            print(f"Index loaded: {len(self.known_files_cache)} files known.")
+        except sqlite3.Error as e:
+            print(f"Warning: Could not load cache (first run?): {e}")
+
+    def _calculate_sha256_with_progress(self, file_path: Path, file_size: int, position: int = 1) -> str:
+        """Calculates the SHA256 hash incrementally with a nested progress bar."""
         hasher = hashlib.sha256()
         try:
-            with open(file_path, 'rb') as f:
-                while chunk := f.read(config.BLOCK_SIZE):
-                    hasher.update(chunk)
+            with tqdm(
+                total=file_size, 
+                unit='B', 
+                unit_scale=True, 
+                unit_divisor=1024, 
+                desc=f"  Hashing {file_path.name[:20]}...", 
+                position=position, 
+                leave=False
+            ) as pbar:
+                with open(file_path, 'rb') as f:
+                    while chunk := f.read(config.BLOCK_SIZE):
+                        hasher.update(chunk)
+                        pbar.update(len(chunk))
             return hasher.hexdigest()
         except Exception as e:
-            print(f"Error reading file {file_path}: {e}")
+            tqdm.write(f"Error reading file {file_path}: {e}")
             return ''
             
     def _check_if_known_and_unchanged(self, file_path: Path, file_stat: os.stat_result) -> bool:
         """
-        Checks if a file with the same path, size, and modification time 
-        already exists in FilePathInstances.
+        Checks cache for existing file match.
         """
-        date_modified_str = datetime.datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        path_str = str(file_path)
+        if path_str not in self.known_files_cache:
+            return False
+            
+        cached_date, cached_size = self.known_files_cache[path_str]
+        current_date = datetime.datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
         
-        query = """
-        SELECT COUNT(*) FROM FilePathInstances
-        WHERE path = ? AND date_modified = ? AND file_id IN (
-            SELECT file_id FROM FilePathInstances
-            INNER JOIN MediaContent ON FilePathInstances.content_hash = MediaContent.content_hash
-            WHERE MediaContent.size = ?
-        );
-        """
-        result = self.db.execute_query(query, (str(file_path), date_modified_str, file_stat.st_size))
-        
-        if result and result[0][0] > 0:
+        # Check matching Size and Date
+        if cached_size == file_stat.st_size and cached_date == current_date:
             return True
+            
         return False
 
     def scan_and_insert(self):
         """Traverses the source directory and inserts file data into the database."""
         
         print(f"\nStarting scan of directory: {self.source_dir}")
+        self._load_cache() # Populate cache before starting
+        
         self.files_scanned_count = 0
         self.files_inserted_count = 0
         
         if not self.source_dir.is_dir():
-            print(f"Error: Source directory not found or is not a directory: {self.source_dir}")
+            print(f"Error: Source directory not found: {self.source_dir}")
             return
 
-        # 1. Pre-count files for Progress Bar (UX)
         print("Analyzing directory structure (counting files)...")
         total_files = sum([len(files) for r, d, files in os.walk(self.source_dir)])
         
-        # 2. Walk and Process
-        with tqdm(total=total_files, unit="file", desc="Scanning") as pbar:
+        with tqdm(total=total_files, unit="file", desc="Scanning", position=0) as pbar_main:
             for root, _, files in os.walk(self.source_dir):
                 root_path = Path(root)
                 for file_name in files:
-                    pbar.update(1)
-                    
+                    pbar_main.update(1)
                     full_path = root_path / file_name
                     
-                    # Check file eligibility
                     file_type_group = self._get_file_type_group(full_path)
                     if file_type_group == 'OTHER' and not full_path.suffix == '':
                         continue 
@@ -129,33 +153,29 @@ class FileScanner:
                     try:
                         file_stat = full_path.stat()
                     except Exception as e:
-                        # tqdm.write ensures the progress bar doesn't break visually
-                        tqdm.write(f"Warning: Could not get stats for file {full_path}: {e}")
+                        tqdm.write(f"Warning: Could not get stats for {full_path}: {e}")
                         continue
 
-                    # Quick skip check
+                    # --- FAST RESUME CHECK ---
                     if self._check_if_known_and_unchanged(full_path, file_stat):
                         continue
 
                     # --- HASHING ---
-                    pbar.set_description(f"Hashing: {file_name[:20]}") # Update UI
-                    content_hash = self._calculate_sha256(full_path)
+                    content_hash = self._calculate_sha256_with_progress(full_path, file_stat.st_size)
                     if not content_hash:
                         continue 
 
-                    # --- INSERTION PREP ---
+                    # --- INSERTION ---
                     full_path_str = str(full_path)
                     relative_path_str = str(full_path.relative_to(self.source_dir))
                     date_modified_str = datetime.datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-                    # 1. Insert/Ignore into MediaContent
                     media_content_query = """
                         INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, date_best)
                         VALUES (?, ?, ?, ?);
                     """
                     self.db.execute_query(media_content_query, (content_hash, file_stat.st_size, file_type_group, date_modified_str))
 
-                    # 2. Insert/Ignore into FilePathInstances
                     instance_query = """
                         INSERT OR IGNORE INTO FilePathInstances 
                         (content_hash, path, original_full_path, original_relative_path, date_modified, is_primary) 
@@ -167,21 +187,20 @@ class FileScanner:
                         ))
                         if isinstance(instance_rows_inserted, int) and instance_rows_inserted > 0:
                             self.files_inserted_count += 1
+                            # Update Cache immediately to support instant-resume if crashed now
+                            self.known_files_cache[full_path_str] = (date_modified_str, file_stat.st_size)
+                            
                     except sqlite3.Error as e:
                         if 'UNIQUE constraint failed' not in str(e):
-                             tqdm.write(f"Database insertion failed for {full_path}: {e}")
+                             tqdm.write(f"Database error for {full_path}: {e}")
                 
-                # Reset description after loop
-                pbar.set_description("Scanning")
-
         print(f"\nScan complete. Total files scanned: {self.files_scanned_count}, unique instances recorded: {self.files_inserted_count}")
 
 if __name__ == "__main__":
     manager = ConfigManager()
-    
-    parser = argparse.ArgumentParser(description="File Scanner Module for file_organizer: Traverses directory and hashes media content.")
-    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    parser.add_argument('--scan', action='store_true', help=f"Run a scan on the configured source directory: {manager.SOURCE_DIR}")
+    parser = argparse.ArgumentParser(description="File Scanner Module")
+    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--scan', action='store_true')
     args = parser.parse_args()
 
     if args.version:
