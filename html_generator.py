@@ -1,6 +1,5 @@
 # ==============================================================================
 # File: html_generator.py
-# ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
@@ -23,9 +22,12 @@ _CHANGELOG_ENTRIES = [
     "FIX: Resolved ValueError by separating CSS/JS from .format() template parsing.",
     "FIX: Switched to simple string concatenation for final HTML to prevent JS corruption.",
     "FIX: Replaced onclick data-passing with HTML5 data-attributes to fix Metadata Modal.",
-    "FIX: Resolved f-string backslash SyntaxError and restored missing sidebar variables."
+    "FIX: Resolved f-string backslash SyntaxError and restored missing sidebar variables.",
+    "PERFORMANCE: Switched from string concatenation to list buffering for row generation (O(n) vs O(n^2)).",
+    "UX: Added TQDM progress bar for HTML generation feedback."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.6.22
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -33,6 +35,7 @@ from collections import defaultdict
 import argparse
 import sys
 import json
+from tqdm import tqdm
 
 from database_manager import DatabaseManager
 from config_manager import ConfigManager 
@@ -70,6 +73,7 @@ class HTMLGenerator:
         dupe_groups = defaultdict(list)
         has_root_files = False
 
+        # Pre-process trees (Fast enough to likely not need a progress bar, but useful context)
         for row in data:
             c_hash, group, _, rel_path, _, _, _, _, _, dupe_count = row
             ext = Path(rel_path).suffix.lower() or "no_ext"
@@ -91,82 +95,96 @@ class HTMLGenerator:
 
     def _render_folder_tree_html(self, tree: Dict, current_path: str = "") -> str:
         if not tree: return ""
-        html = '<ul class="tree-list">'
+        # Optimization: List join instead of string concat
+        html_parts = ['<ul class="tree-list">']
         for folder, subtree in sorted(tree.items()):
             full_path = f"{current_path}/{folder}".strip("/")
             safe_path = full_path.replace("'", "\\'")
             if not subtree:
-                html += f'<li><span class="tree-item" onclick="filterTable(\'folder\', \'{safe_path}\')">📁 {folder}</span></li>'
+                html_parts.append(f'<li><span class="tree-item" onclick="filterTable(\'folder\', \'{safe_path}\')">📁 {folder}</span></li>')
             else:
-                html += f'<li><details><summary class="tree-summary" onclick="filterTable(\'folder\', \'{safe_path}\')">📂 {folder}</summary>'
-                html += self._render_folder_tree_html(subtree, full_path)
-                html += '</details></li>'
-        html += "</ul>"
-        return html
+                html_parts.append(f'<li><details><summary class="tree-summary" onclick="filterTable(\'folder\', \'{safe_path}\')">📂 {folder}</summary>')
+                html_parts.append(self._render_folder_tree_html(subtree, full_path))
+                html_parts.append('</details></li>')
+        html_parts.append("</ul>")
+        return "".join(html_parts)
 
     def _render_type_tree_html(self, tree: Dict) -> str:
-        html = '<ul class="type-list">'
+        html_parts = ['<ul class="type-list">']
         icons = {'IMAGE': '🖼️', 'VIDEO': '🎬', 'AUDIO': '🎵', 'DOCUMENT': '📄'}
         for group, extensions in sorted(tree.items()):
             icon = icons.get(group, '📁')
-            html += f'<li><details open><summary class="type-summary">{icon} {group}</summary><ul>'
+            html_parts.append(f'<li><details open><summary class="type-summary">{icon} {group}</summary><ul>')
             for ext, count in sorted(extensions.items()):
-                html += f'<li class="tree-item" onclick="filterTable(\'type\', \'{group}|{ext}\')">{ext} <span class="badge-count">{count}</span></li>'
-            html += '</ul></details></li>'
-        html += "</ul>"
-        return html
+                html_parts.append(f'<li class="tree-item" onclick="filterTable(\'type\', \'{group}|{ext}\')">{ext} <span class="badge-count">{count}</span></li>')
+            html_parts.append('</ul></details></li>')
+        html_parts.append("</ul>")
+        return "".join(html_parts)
 
     def _render_dupe_tree_html(self, dupes: Dict) -> str:
         if not dupes: return "<p style='padding:10px; color:#888'>No duplicates found! 🎉</p>"
-        html = '<ul class="dupe-list">'
+        html_parts = ['<ul class="dupe-list">']
         for c_hash, info in sorted(dupes.items(), key=lambda x: x[1]['count'], reverse=True):
-            html += f'<li class="tree-item dupe-item" onclick="filterTable(\'hash\', \'{c_hash}\')">'
-            html += f'<span class="dupe-name">{info["name"]}</span><span class="badge-fail">{info["count"]} copies</span></li>'
-        html += "</ul>"
-        return html
+            html_parts.append(f'<li class="tree-item dupe-item" onclick="filterTable(\'hash\', \'{c_hash}\')">')
+            html_parts.append(f'<span class="dupe-name">{info["name"]}</span><span class="badge-fail">{info["count"]} copies</span></li>')
+        html_parts.append("</ul>")
+        return "".join(html_parts)
 
     def generate_html_report(self):
+        print("Fetching data for HTML generation...")
         data = self._get_organized_media_data()
+        
+        print(f"Building Directory Trees for {len(data)} files...")
         folder_tree, type_tree, dupe_groups, has_root = self._build_trees(data)
         
-        body_rows = ""
-        for row in data:
-            c_hash, group, date, rel_path, size, w, h, full_path, meta_json, dupe_count = row
-            size_kb = size / 1024
-            size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
-            filename = Path(rel_path).name
-            dir_path = str(Path(rel_path).parent).replace('\\', '/')
-            
-            # FIX: Resolve backslash SyntaxError by manipulating path outside f-string
-            clean_full_path = str(full_path).replace('\\', '/')
-            file_link = f"file:///{clean_full_path}"
-            
-            media_html = ""
-            if group == 'IMAGE':
-                media_html = f'<img src="{file_link}" class="preview-img" onclick="window.open(this.src)">'
-            elif group == 'VIDEO':
-                media_html = f'<video class="preview-video" controls><source src="{file_link}">Video Not Supported</video>'
-            elif group == 'AUDIO':
-                media_html = f'<audio class="preview-audio" controls><source src="{file_link}"></audio>'
-            else:
-                media_html = f'📄 <a href="{file_link}" target="_blank">Open</a>'
+        # Optimization: Use list for massive row generation
+        body_rows_list = []
+        
+        # UX: Progress Bar
+        with tqdm(total=len(data), desc="Generating HTML Rows", unit="row") as pbar:
+            for row in data:
+                pbar.update(1)
+                c_hash, group, date, rel_path, size, w, h, full_path, meta_json, dupe_count = row
+                
+                size_kb = size / 1024
+                size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
+                filename = Path(rel_path).name
+                dir_path = str(Path(rel_path).parent).replace('\\', '/')
+                
+                # FIX: Resolve backslash SyntaxError by manipulating path outside f-string
+                clean_full_path = str(full_path).replace('\\', '/')
+                file_link = f"file:///{clean_full_path}"
+                
+                media_html = ""
+                if group == 'IMAGE':
+                    media_html = f'<img src="{file_link}" class="preview-img" onclick="window.open(this.src)">'
+                elif group == 'VIDEO':
+                    media_html = f'<video class="preview-video" controls><source src="{file_link}">Video Not Supported</video>'
+                elif group == 'AUDIO':
+                    media_html = f'<audio class="preview-audio" controls><source src="{file_link}"></audio>'
+                else:
+                    media_html = f'📄 <a href="{file_link}" target="_blank">Open</a>'
 
-            try:
-                meta_dict = json.loads(meta_json) if meta_json else {}
-            except:
-                meta_dict = {"error": "Invalid metadata JSON"}
-            
-            meta_attr = json.dumps(meta_dict).replace("'", "&apos;")
-            
-            body_rows += f"""
-            <tr data-folder="{dir_path}" data-hash="{c_hash}" data-group="{group}" data-ext="{Path(rel_path).suffix.lower()}">
-                <td><span class="badge">{group}</span></td>
-                <td><strong>{filename}</strong><br><small>{rel_path}</small>
-                    {f'<br><span class="badge-fail">DUPLICATE</span>' if dupe_count > 1 else ''}</td>
-                <td>{media_html}</td>
-                <td data-order="{size}">{size_str}</td>
-                <td><button class="meta-btn" data-name="{filename}" data-meta='{meta_attr}' onclick="showMeta(this)">🔍</button></td>
-            </tr>"""
+                try:
+                    meta_dict = json.loads(meta_json) if meta_json else {}
+                except:
+                    meta_dict = {"error": "Invalid metadata JSON"}
+                
+                meta_attr = json.dumps(meta_dict).replace("'", "&apos;")
+                
+                row_html = f"""
+                <tr data-folder="{dir_path}" data-hash="{c_hash}" data-group="{group}" data-ext="{Path(rel_path).suffix.lower()}">
+                    <td><span class="badge">{group}</span></td>
+                    <td><strong>{filename}</strong><br><small>{rel_path}</small>
+                        {f'<br><span class="badge-fail">DUPLICATE</span>' if dupe_count > 1 else ''}</td>
+                    <td>{media_html}</td>
+                    <td data-order="{size}">{size_str}</td>
+                    <td><button class="meta-btn" data-name="{filename}" data-meta='{meta_attr}' onclick="showMeta(this)">🔍</button></td>
+                </tr>"""
+                body_rows_list.append(row_html)
+
+        print("Assembling final HTML structure...")
+        body_rows = "".join(body_rows_list)
 
         sidebar_f = self._render_folder_tree_html(folder_tree)
         sidebar_t = self._render_type_tree_html(type_tree)
