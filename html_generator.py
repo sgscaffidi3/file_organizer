@@ -28,10 +28,11 @@ _CHANGELOG_ENTRIES = [
     "ARCHITECTURE: Switched to Client-Side Rendering (JSON Island) for massive performance gain on 100k+ files.",
     "UX: Added Dashboard Summary Cards (Total Size, Wasted Space, etc).",
     "UX: Implemented Lazy Loading for media previews to prevent browser hangs.",
-    "UX: Added Dedicated Duplicate Report tab."
+    "UX: Added Dedicated Duplicate Report tab.",
+    "BUG FIX: Defined hidden DataTables columns for Folder, Extension, and Hash to enable Sidebar Filtering."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.7.26
+# Version: 0.7.27
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
@@ -92,8 +93,6 @@ class HTMLGenerator:
             
             type_tree[group][ext] += 1
             if dupe_count > 1:
-                # We only want to add this hash to the dupe list once, but we're iterating instances
-                # So we check if we've already logged this hash
                 if c_hash not in dupe_groups:
                     dupe_groups[c_hash] = {"count": dupe_count, "name": Path(rel_path).name}
         
@@ -144,8 +143,7 @@ class HTMLGenerator:
         # --- Stats Calculation ---
         total_files = len(data)
         total_size = sum(row[4] for row in data)
-        # Calculate wasted space: (count - 1) * size for each unique hash
-        # Since 'data' has all instances, we need unique hashes first
+        
         unique_files = {}
         for row in data:
             if row[0] not in unique_files:
@@ -156,11 +154,8 @@ class HTMLGenerator:
             if info['count'] > 1:
                 wasted_size += info['size'] * (info['count'] - 1)
 
-        # --- JSON Serialization (The Data Island) ---
-        # We transform the data into a list of lists for DataTables to consume efficiently
-        # Schema: [Hash, Group, Filename, RelPath, Size(int), Size(str), FullPath, MetaJSON, DupeCount, FolderPath]
+        # --- JSON Serialization ---
         js_data = []
-        
         with tqdm(total=len(data), desc="Serializing Data", unit="row") as pbar:
             for row in data:
                 pbar.update(1)
@@ -170,13 +165,23 @@ class HTMLGenerator:
                 folder_path = str(Path(rel_path).parent).replace('\\', '/')
                 clean_full_path = str(full_path).replace('\\', '/')
                 
-                # Pre-clean metadata for JS
                 try:
-                    # Sanity check JSON
                     if meta_json: json.loads(meta_json)
                 except:
                     meta_json = "{}"
 
+                # DATA STRUCTURE INDEX:
+                # 0: Hash
+                # 1: Group
+                # 2: Name
+                # 3: RelPath
+                # 4: Size (int)
+                # 5: Size (str)
+                # 6: FullPath
+                # 7: MetaJSON
+                # 8: DupeCount
+                # 9: FolderPath
+                # 10: Extension
                 js_data.append([
                     c_hash,
                     group,
@@ -198,7 +203,6 @@ class HTMLGenerator:
         sidebar_t = self._render_type_tree_html(type_tree)
         root_btn = '<div class="tree-item" onclick="filterByFolder(\'.\')" style="color:#03dac6; margin-bottom:5px;">📂 (Root Directory)</div>' if has_root else ""
 
-        # --- Dashboard Cards ---
         stats_html = f"""
         <div class="stats-container">
             <div class="stat-card"><h3>Total Files</h3><p>{total_files:,}</p></div>
@@ -208,52 +212,43 @@ class HTMLGenerator:
         </div>
         """
 
-        # --- CSS ---
         css_content = """
         :root { --bg: #121212; --panel: #1e1e1e; --text: #e0e0e0; --accent: #bb86fc; --sec: #03dac6; --err: #cf6679; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden; }
         
-        /* Layout */
         #sidebar { width: 320px; background: var(--panel); border-right: 1px solid #333; display: flex; flex-direction: column; flex-shrink: 0; }
         #main-area { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; padding: 20px; }
         
-        /* Stats */
         .stats-container { display: flex; gap: 15px; margin-bottom: 20px; }
         .stat-card { background: var(--panel); padding: 15px; border-radius: 8px; flex: 1; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
         .stat-card h3 { margin: 0 0 5px 0; font-size: 0.9em; color: #888; }
         .stat-card p { margin: 0; font-size: 1.5em; font-weight: bold; color: var(--sec); }
         .stat-card.fail p { color: var(--err); }
 
-        /* Sidebar Tabs */
         .tab-bar { display: flex; border-bottom: 1px solid #333; }
         .tab-btn { flex: 1; padding: 12px; background: #252525; color: #888; border: none; cursor: pointer; font-weight: bold; }
         .tab-btn.active { background: var(--panel); color: var(--accent); border-bottom: 2px solid var(--accent); }
         .sb-content { flex-grow: 1; overflow-y: auto; padding: 10px; display: none; }
         .sb-content.active { display: block; }
 
-        /* Trees */
         ul.tree-list, ul.type-list { list-style: none; padding-left: 10px; margin: 0; font-size: 0.9em; }
         .tree-item { cursor: pointer; padding: 3px 6px; display: block; color: #bbb; border-radius: 3px; }
         .tree-item:hover { background: #333; color: var(--sec); }
         details > summary { cursor: pointer; color: #999; padding: 3px 0; }
         
-        /* Main Tables */
         .view-tab { display: none; height: 100%; flex-direction: column; }
         .view-tab.active { display: flex; }
         .dataTables_wrapper { color: #ccc; font-size: 0.9em; flex-grow: 1; overflow-y: auto; }
         table.dataTable tbody tr { background-color: var(--panel) !important; }
         table.dataTable tbody td { border-color: #333; vertical-align: middle; }
         
-        /* Previews */
         .media-thumb { width: 100px; height: 60px; object-fit: contain; background: #000; border: 1px solid #444; cursor: pointer; }
         
-        /* Modal */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); }
         .modal-content { background: var(--panel); margin: 5% auto; padding: 20px; width: 80%; max-width: 800px; border-radius: 8px; position: relative; max-height: 85vh; overflow-y: auto; }
         .close-modal { position: absolute; right: 15px; top: 10px; color: #fff; font-size: 24px; cursor: pointer; }
         pre.meta-dump { background: #000; padding: 15px; color: #0f0; border-radius: 4px; overflow-x: auto; }
         
-        /* Badges */
         .badge { padding: 2px 6px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
         .bg-IMAGE { background: #3f51b5; color: #fff; }
         .bg-VIDEO { background: #c2185b; color: #fff; }
@@ -262,11 +257,8 @@ class HTMLGenerator:
         .dupe-alert { background: var(--err); color: #000; font-weight: bold; margin-left: 5px; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; }
         """
 
-        # --- Javascript Logic ---
         js_content = """
         let mainTable, dupeTable;
-        // Data Schema: 
-        // 0:Hash, 1:Group, 2:Name, 3:RelPath, 4:Size, 5:SizeStr, 6:FullPath, 7:Meta, 8:DupeCount, 9:Folder, 10:Ext
         const mediaData = """ + json_payload + """;
 
         $(document).ready(function() {
@@ -281,14 +273,19 @@ class HTMLGenerator:
                     }},
                     { title: "Preview", data: 6, orderable: false, render: (d, type, row) => renderPreview(d, row[1]) },
                     { title: "Size", data: 4, render: (d, type, row) => row[5] },
-                    { title: "Actions", data: null, orderable: false, render: (d, type, row) => `<button onclick='viewMeta(${JSON.stringify(row)})'>🔍 Info</button>` }
+                    { title: "Actions", data: null, orderable: false, render: (d, type, row) => `<button onclick='viewMeta(${JSON.stringify(row)})'>🔍 Info</button>` },
+                    
+                    // HIDDEN COLUMNS FOR FILTERING
+                    { title: "Folder", data: 9, visible: false },
+                    { title: "Ext", data: 10, visible: false },
+                    { title: "Hash", data: 0, visible: false }
                 ],
                 pageLength: 25,
-                deferRender: true, // Critical for performance
+                deferRender: true, 
                 dom: 'frtip'
             });
 
-            // Duplicates Table (Filtered View)
+            // Duplicates Table
             const dupeData = mediaData.filter(row => row[8] > 1);
             dupeTable = $('#dupeTable').DataTable({
                 data: dupeData,
@@ -299,20 +296,18 @@ class HTMLGenerator:
                     { title: "Size", data: 5 },
                     { title: "Copies", data: 8 }
                 ],
-                order: [[4, 'desc']], // Sort by copy count
+                order: [[4, 'desc']], 
                 pageLength: 25
             });
         });
 
         function renderPreview(path, group) {
-            // Lazy load string construction
-            path = "file:///" + path; // Local file access
-            if (group === 'IMAGE') return `<img data-src="${path}" class="media-thumb lazy" onclick="window.open('${path}')" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">`; // placeholder
+            path = "file:///" + path; 
+            if (group === 'IMAGE') return `<img data-src="${path}" class="media-thumb lazy" onclick="window.open('${path}')" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">`; 
             if (group === 'VIDEO') return `<div style="font-size:0.8em; color:#666">🎥 Video<br>(Click Info)</div>`;
             return `<div style="font-size:0.8em; color:#666">📄 File</div>`;
         }
 
-        // Lazy Loading Observer
         const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
@@ -324,7 +319,6 @@ class HTMLGenerator:
             });
         });
 
-        // Re-attach observer on table draw
         $('#fileTable').on('draw.dt', function () {
             $('.media-thumb.lazy').each(function() { observer.observe(this); });
         });
@@ -341,25 +335,31 @@ class HTMLGenerator:
             $(`button[onclick="switchSidebar('${tabId}')"]`).addClass('active');
         }
 
+        // --- FILTERING LOGIC ---
         function filterByFolder(path) {
             switchTab('files');
-            if (path === '.') { mainTable.search('').columns().search('').draw(); return; }
-            // Filter Col 9 (Folder) using strict startswith logic via regex
-            // Escape special chars in path
+            if (path === '.') { 
+                mainTable.search('').columns().search('').draw(); 
+                return; 
+            }
+            // Escape Regex chars for exact matching start
             let safePath = path.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\\\$&');
-            mainTable.column(9).search('^' + safePath, true, false).draw();
+            // Filter Column 5 (Folder) using Regex (Start of string)
+            mainTable.column(5).search('^' + safePath, true, false).draw();
         }
 
         function filterByType(group, ext) {
             switchTab('files');
-            mainTable.column(1).search(group).column(10).search(ext).draw();
+            // Filter Col 0 (Type) and Col 6 (Ext)
+            // Note: Column indexes refer to visible + hidden order defined in 'columns' array
+            // Type is Index 0. Ext is Index 6.
+            mainTable.column(0).search(group).column(6).search(ext).draw();
         }
 
         function viewMeta(row) {
             $('#metaJson').text(JSON.stringify(JSON.parse(row[7] || "{}"), null, 4));
             $('#metaModal').fadeIn();
             
-            // Allow video playback in modal if video
             let content = '';
             let path = "file:///" + row[6];
             if (row[1] === 'VIDEO') content = `<video controls style="width:100%"><source src="${path}"></video>`;
@@ -379,7 +379,6 @@ class HTMLGenerator:
     <style>{css_content}</style>
 </head>
 <body>
-    <!-- Sidebar -->
     <div id="sidebar">
         <div class="tab-bar">
             <button class="tab-btn active" onclick="switchSidebar('folders')">Folders</button>
@@ -395,7 +394,6 @@ class HTMLGenerator:
         </div>
     </div>
 
-    <!-- Main Content -->
     <div id="main-area">
         {stats_html}
         
@@ -413,7 +411,6 @@ class HTMLGenerator:
         </div>
     </div>
 
-    <!-- Metadata Modal -->
     <div id="metaModal" class="modal">
         <div class="modal-content">
             <span class="close-modal" onclick="$('#metaModal').fadeOut(); $('#mediaContainer').html('');">&times;</span>
