@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class (F04).",
     "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
@@ -9,10 +9,11 @@ _CHANGELOG_ENTRIES = [
     "ARCHITECTURE REFACTOR: Migrated to Hybrid Metadata model via AssetManager.",
     "CLEANUP: Removed redundant local extractors; delegated all routing to AssetManager.",
     "FEATURE: Enabled full support for VIDEO, IMAGE, AUDIO, and DOCUMENT groups.",
-    "UX: Added TQDM progress bar for real-time extraction feedback."
+    "UX: Added TQDM progress bar for real-time extraction feedback.",
+    "BUG FIX: Updated _get_files_to_process query to prevent infinite re-processing of Audio/Docs (which inherently have NULL width/height)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.7
+# Version: 0.6.8
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
@@ -33,12 +34,24 @@ class MetadataProcessor:
         self.skip_count = 0
 
     def _get_files_to_process(self) -> List[Tuple[str, str, str]]:
-        """Finds records where core metadata (width/height) is missing."""
+        """
+        Finds records where metadata is missing.
+        Logic is split by type to avoid infinite loops on types that lack dimensions.
+        """
+        # We look for:
+        # 1. Images/Videos missing dimensions.
+        # 2. Audio missing duration.
+        # 3. Everything else (Docs) missing the JSON backpack.
         query = """
         SELECT T1.content_hash, T1.file_type_group, T2.original_full_path
         FROM MediaContent T1
         INNER JOIN FilePathInstances T2 ON T1.content_hash = T2.content_hash AND T2.is_primary = 1
-        WHERE (T1.width IS NULL OR T1.height IS NULL)
+        WHERE 
+           (T1.file_type_group IN ('IMAGE', 'VIDEO') AND (T1.width IS NULL OR T1.height IS NULL))
+           OR
+           (T1.file_type_group = 'AUDIO' AND T1.duration IS NULL)
+           OR
+           (T1.file_type_group NOT IN ('IMAGE', 'VIDEO', 'AUDIO') AND T1.extended_metadata IS NULL);
         """
         results = self.db.execute_query(query)
         return results if results else []
@@ -63,6 +76,7 @@ class MetadataProcessor:
                 file_path = Path(path_str)
                 
                 if not file_path.exists():
+                    # We log it but don't crash. Next run will try again or we can implement a 'missing' flag later.
                     self.skip_count += 1
                     continue
 
@@ -92,6 +106,7 @@ if __name__ == "__main__":
         sys.exit(0)
     elif args.process:
         db_path = manager.OUTPUT_DIR / 'metadata.sqlite'
+        # Ensure the directory exists
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with DatabaseManager(db_path) as db:
             db.create_schema()
