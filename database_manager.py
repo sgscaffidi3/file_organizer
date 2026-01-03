@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 4
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -19,7 +19,8 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL SCHEMA FIX: Added the `date_modified` column to the `FilePathInstances` table.",
     "CRITICAL API FIX: Updated `execute_query` to return the `rowcount` for non-SELECT queries.",
     "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`.",
-    "FEATURE: Added dump_database() method and --dump_db CLI option for quick debugging inspection."
+    "FEATURE: Added dump_database() method and --dump_db CLI option for quick debugging inspection.",
+    "SCHEMA MIGRATION: Added auto-detection and creation of 'new_path_id' column if missing (Fixes Deduplicator crash on legacy DBs)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
@@ -100,7 +101,7 @@ class DatabaseManager:
             raise e
     
     def create_schema(self):
-        """Creates the necessary tables if they don't exist."""
+        """Creates the necessary tables if they don't exist and handles basic migrations."""
         if not self.conn:
             self.connect()
 
@@ -119,6 +120,9 @@ class DatabaseManager:
             bitrate INTEGER,
             title TEXT,
             video_codec TEXT, -- New: Explicit column for codec
+            
+            -- Deduplication
+            new_path_id TEXT,
             
             -- Hybrid "Backpack" Column
             extended_metadata TEXT -- New: Stores exhaustive JSON blob
@@ -139,8 +143,7 @@ class DatabaseManager:
             
             -- Deduplication/Organization fields:
             is_primary BOOLEAN DEFAULT 0,
-            new_path_id INTEGER,
-
+            
             FOREIGN KEY (content_hash) REFERENCES MediaContent(content_hash) ON DELETE CASCADE
         );
         """
@@ -148,6 +151,14 @@ class DatabaseManager:
         try:
             self.conn.execute(content_table_sql)
             self.conn.execute(instance_table_sql)
+            
+            # --- MIGRATION: Ensure new_path_id exists (for legacy DBs) ---
+            try:
+                self.conn.execute("ALTER TABLE MediaContent ADD COLUMN new_path_id TEXT;")
+            except sqlite3.OperationalError:
+                # Column likely already exists, ignore error
+                pass
+                
             self.conn.commit()
         except sqlite3.Error as e:
             self.conn.rollback()
