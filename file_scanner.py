@@ -1,11 +1,7 @@
 # ==============================================================================
 # File: file_scanner.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
-_PATCH_VERSION = 12
-# Version: <Automatically calculated via dynamic import of target module>
-# ------------------------------------------------------------------------------
-# CHANGELOG:
+_MINOR_VERSION = 4
 _CHANGELOG_ENTRIES = [
     "Initial implementation of high-performance file hashing and scanning logic (F01).",
     "Implemented incremental hashing using SHA256 (N01).",
@@ -15,10 +11,13 @@ _CHANGELOG_ENTRIES = [
     "Refined path normalization to ensure absolute paths for database storage.",
     "Optimized file skipping for files already present in the database with matching size/mtime.",
     "FIX: The final path insertion uses the full path for the `path` column, explicitly ensuring correct behavior.",
-    "CRITICAL FIX: Explicitly listed all column names in the FilePathInstances INSERT OR IGNORE statement to ensure SQLite correctly enforces the UNIQUE constraint on the 'path' column. (This definitively resolves the AssertionError: 6 != 3 on re-scan).",
+    "CRITICAL FIX: Explicitly listed all column names in the FilePathInstances INSERT OR IGNORE statement to ensure SQLite correctly enforces the UNIQUE constraint on the 'path' column.",
     "DEFINITIVE FIX: Re-verified the explicit column listing in FilePathInstances INSERT OR IGNORE to ensure SQLite's UNIQUE constraint on 'path' is enforced.",
-    "CRITICAL TEST FIX: Modified the insertion logic in `scan_and_insert` to ensure `self.files_inserted_count` is incremented accurately by checking the rows updated by the database manager for new path instances (Fixes `test_file_scanner` failures)."
+    "CRITICAL TEST FIX: Modified the insertion logic in `scan_and_insert` to ensure `self.files_inserted_count` is incremented accurately.",
+    "UX: Added TQDM progress bar for real-time scanning feedback."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.4.12
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -28,11 +27,12 @@ import datetime
 import argparse
 import sys
 import sqlite3
+from tqdm import tqdm
 
 from database_manager import DatabaseManager
 from config_manager import ConfigManager
 from version_util import print_version_info
-import config # For BLOCK_SIZE
+import config 
 
 # Define file type groups based on common extensions (ConfigManager manages this, but define a fallback)
 DEFAULT_FILE_GROUPS: Dict[str, List[str]] = {
@@ -89,10 +89,8 @@ class FileScanner:
             WHERE MediaContent.size = ?
         );
         """
-        # Note: Checking size via MediaContent ensures we only skip if the content is fully hashed/inserted.
         result = self.db.execute_query(query, (str(file_path), date_modified_str, file_stat.st_size))
         
-        # result is [(count,)] or None
         if result and result[0][0] > 0:
             return True
         return False
@@ -104,85 +102,78 @@ class FileScanner:
         self.files_scanned_count = 0
         self.files_inserted_count = 0
         
-        # Ensure source directory exists and is valid
         if not self.source_dir.is_dir():
             print(f"Error: Source directory not found or is not a directory: {self.source_dir}")
             return
-            
-        for root, _, files in os.walk(self.source_dir):
-            root_path = Path(root)
-            for file_name in files:
-                
-                full_path = root_path / file_name
-                
-                # Check file eligibility
-                file_type_group = self._get_file_type_group(full_path)
-                if file_type_group == 'OTHER' and not full_path.suffix == '':
-                    # Only process known media types
-                    continue 
 
-                self.files_scanned_count += 1
-                
-                try:
-                    file_stat = full_path.stat()
-                except Exception as e:
-                    print(f"Warning: Could not get stats for file {full_path}: {e}")
-                    continue
-
-                # Quick skip check for already-known, unchanged files
-                if self._check_if_known_and_unchanged(full_path, file_stat):
-                    continue
-
-                # --- HASHING ---
-                content_hash = self._calculate_sha256(full_path)
-                if not content_hash:
-                    continue # Skip if hashing failed
-
-                # --- INSERTION PREP ---
-                full_path_str = str(full_path)
-                relative_path_str = str(full_path.relative_to(self.source_dir))
-                date_modified_str = datetime.datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-
-                # 1. Insert/Ignore into MediaContent
-                media_content_query = """
-                    INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, date_best)
-                    VALUES (?, ?, ?, ?);
-                """
-                # date_best is set to the file's modification time initially
-                # execute_query returns the rowcount for INSERT statements
-                self.db.execute_query(media_content_query, (content_hash, file_stat.st_size, file_type_group, date_modified_str))
-
-                # 2. Insert/Ignore into FilePathInstances
-                instance_query = """
-                    INSERT OR IGNORE INTO FilePathInstances 
-                    (content_hash, path, original_full_path, original_relative_path, date_modified, is_primary) 
-                    VALUES (?, ?, ?, ?, ?, ?);
-                """
-                instance_rows_inserted = 0
-                
-                try:
-                    # The path is the full, absolute path for uniqueness
-                    instance_rows_inserted = self.db.execute_query(instance_query, (
-                        content_hash, 
-                        full_path_str, 
-                        full_path_str, 
-                        relative_path_str, 
-                        date_modified_str, 
-                        0
-                    ))
+        # 1. Pre-count files for Progress Bar (UX)
+        print("Analyzing directory structure (counting files)...")
+        total_files = sum([len(files) for r, d, files in os.walk(self.source_dir)])
+        
+        # 2. Walk and Process
+        with tqdm(total=total_files, unit="file", desc="Scanning") as pbar:
+            for root, _, files in os.walk(self.source_dir):
+                root_path = Path(root)
+                for file_name in files:
+                    pbar.update(1)
                     
-                    # CRITICAL FIX: The counter must increment if a new path instance was recorded.
-                    if isinstance(instance_rows_inserted, int) and instance_rows_inserted > 0:
-                        self.files_inserted_count += 1
+                    full_path = root_path / file_name
                     
-                except sqlite3.Error as e:
-                    # We catch UNIQUE constraint failures specifically for better logging/control
-                    if 'UNIQUE constraint failed' in str(e):
-                         pass # This is expected behavior for duplicate path re-scans
-                    else:
-                         print(f"Database insertion failed for {full_path}: {e}")
+                    # Check file eligibility
+                    file_type_group = self._get_file_type_group(full_path)
+                    if file_type_group == 'OTHER' and not full_path.suffix == '':
+                        continue 
+
+                    self.files_scanned_count += 1
+                    
+                    try:
+                        file_stat = full_path.stat()
+                    except Exception as e:
+                        # tqdm.write ensures the progress bar doesn't break visually
+                        tqdm.write(f"Warning: Could not get stats for file {full_path}: {e}")
+                        continue
+
+                    # Quick skip check
+                    if self._check_if_known_and_unchanged(full_path, file_stat):
+                        continue
+
+                    # --- HASHING ---
+                    pbar.set_description(f"Hashing: {file_name[:20]}") # Update UI
+                    content_hash = self._calculate_sha256(full_path)
+                    if not content_hash:
+                        continue 
+
+                    # --- INSERTION PREP ---
+                    full_path_str = str(full_path)
+                    relative_path_str = str(full_path.relative_to(self.source_dir))
+                    date_modified_str = datetime.datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+                    # 1. Insert/Ignore into MediaContent
+                    media_content_query = """
+                        INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, date_best)
+                        VALUES (?, ?, ?, ?);
+                    """
+                    self.db.execute_query(media_content_query, (content_hash, file_stat.st_size, file_type_group, date_modified_str))
+
+                    # 2. Insert/Ignore into FilePathInstances
+                    instance_query = """
+                        INSERT OR IGNORE INTO FilePathInstances 
+                        (content_hash, path, original_full_path, original_relative_path, date_modified, is_primary) 
+                        VALUES (?, ?, ?, ?, ?, ?);
+                    """
+                    try:
+                        instance_rows_inserted = self.db.execute_query(instance_query, (
+                            content_hash, full_path_str, full_path_str, relative_path_str, date_modified_str, 0
+                        ))
+                        if isinstance(instance_rows_inserted, int) and instance_rows_inserted > 0:
+                            self.files_inserted_count += 1
+                    except sqlite3.Error as e:
+                        if 'UNIQUE constraint failed' not in str(e):
+                             tqdm.write(f"Database insertion failed for {full_path}: {e}")
                 
-        # The database commit now happens inside execute_query
+                # Reset description after loop
+                pbar.set_description("Scanning")
+
         print(f"\nScan complete. Total files scanned: {self.files_scanned_count}, unique instances recorded: {self.files_inserted_count}")
 
 if __name__ == "__main__":
@@ -199,7 +190,6 @@ if __name__ == "__main__":
     elif args.scan:
         try:
             db_path = manager.OUTPUT_DIR / 'metadata.sqlite'
-            # The database must exist and have a schema before the scanner runs
             with DatabaseManager(db_path) as db: 
                 scanner = FileScanner(db, manager.SOURCE_DIR, manager.FILE_GROUPS)
                 scanner.scan_and_insert()
