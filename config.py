@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: config.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 5
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -12,7 +12,10 @@ _CHANGELOG_ENTRIES = [
     "Refactored to remove dynamic settings (paths, file groups), which are now managed by ConfigManager.",
     "Project name changed to \"file_organizer\" in descriptions.",
     "Added CLI argument parsing for --version to allow clean exit during health checks.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning."
+    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
+    "PERFORMANCE: Increased BLOCK_SIZE to 1MB to speed up hashing of large video files.",
+    "REVERT: Rolled back BLOCK_SIZE to 64KB (from 1MB) as per user request.",
+    "PERFORMANCE: Re-enabled 1MB BLOCK_SIZE for production speed."
 ]
 # ------------------------------------------------------------------------------
 from pathlib import Path
@@ -23,7 +26,7 @@ from config_manager import ConfigManager
 
 # --- Execution Settings ---
 DRY_RUN_MODE = True           # If True, no files are copied/moved/deleted (N03).
-BLOCK_SIZE = 65536            # Chunk size for incremental hashing (64KB).
+BLOCK_SIZE = 1048576          # Chunk size for incremental hashing (1MB) - Optimized for Video.
 
 # --- Path Definitions ---
 # The location of the SQLite database file. This is derived from the OUTPUT_DIR
