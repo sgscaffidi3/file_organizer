@@ -1,63 +1,169 @@
 # ==============================================================================
 # File: main.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
-# Version: <Automatically calculated via dynamic import of target module>
-# ------------------------------------------------------------------------------
-# CHANGELOG:
+_MINOR_VERSION = 4
 _CHANGELOG_ENTRIES = [
     "Initial implementation.",
     "Integrated all pipeline components (scanner, processor, deduplicator, migrator).",
     "Added graceful version check and orchestrator logic structure.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
+    "COMPLETE REFACTOR: Implemented full PipelineOrchestrator class.",
+    "FEATURE: Integrated FileScanner, MetadataProcessor, Deduplicator, Migrator, and Generators.",
+    "CLI: Added flags for --scan, --meta, --dedupe, --migrate, --report, and --all.",
+    "SAFETY: Added Database existence checks before running dependent stages."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.4.9
 # ------------------------------------------------------------------------------
 import sys
 import argparse
+import time
 from pathlib import Path
 
-# --- Runtime Imports ---
+# --- Project Dependencies ---
+# Ensure project root is in path
+project_root = Path(__file__).resolve().parent
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
 
-def setup_environment(db_path: Path):
-    """Sets up the necessary directories and DB schema."""
-    # Placeholder for setup logic
-    print(f"Setting up environment for DB: {db_path}")
-
-def run_pipeline(source_dir, destination_dir, db_path):
-    """Orchestrates the entire file organization pipeline."""
-    # Placeholder for running the scanner, processor, etc.
-    print("Running full pipeline...")
-    
-    # 1. Initialization (Example)
+try:
+    import config
     from config_manager import ConfigManager
-    config = ConfigManager()
-    
-    print(f"Source: {source_dir}, Destination: {destination_dir}")
-    print("Pipeline completed.")
+    from database_manager import DatabaseManager
+    from file_scanner import FileScanner
+    from metadata_processor import MetadataProcessor
+    from deduplicator import Deduplicator
+    from migrator import Migrator
+    from report_generator import ReportGenerator
+    from html_generator import HTMLGenerator
+    from version_util import print_version_info
+except ImportError as e:
+    print(f"CRITICAL: Failed to import project modules. {e}")
+    sys.exit(1)
+
+class PipelineOrchestrator:
+    """
+    Coordinates the execution of the File Organizer pipeline stages.
+    """
+    def __init__(self):
+        self.config_mgr = ConfigManager()
+        self.db_path = self.config_mgr.OUTPUT_DIR / 'metadata.sqlite'
+        
+    def _print_header(self, title: str):
+        print("\n" + "="*60)
+        print(f" {title.upper()}")
+        print("="*60)
+
+    def verify_db_exists(self) -> bool:
+        if not self.db_path.exists():
+            print(f"ERROR: Database not found at {self.db_path}")
+            print("       Please run with --scan to initialize the database.")
+            return False
+        return True
+
+    def run_scan(self):
+        self._print_header("Stage 1: File Scanning")
+        # Ensure output directory exists for DB
+        self.config_mgr.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        
+        with DatabaseManager(self.db_path) as db:
+            db.create_schema()
+            scanner = FileScanner(db, self.config_mgr.SOURCE_DIR, self.config_mgr.FILE_GROUPS)
+            scanner.scan_and_insert()
+
+    def run_metadata(self):
+        self._print_header("Stage 2: Metadata Extraction")
+        if not self.verify_db_exists(): return
+        
+        with DatabaseManager(self.db_path) as db:
+            processor = MetadataProcessor(db, self.config_mgr)
+            processor.process_metadata()
+
+    def run_dedupe(self):
+        self._print_header("Stage 3: Deduplication & Path Calculation")
+        if not self.verify_db_exists(): return
+
+        with DatabaseManager(self.db_path) as db:
+            deduper = Deduplicator(db, self.config_mgr)
+            deduper.run_deduplication()
+
+    def run_migrate(self):
+        self._print_header("Stage 4: Migration (Copy)")
+        if not self.verify_db_exists(): return
+
+        # Check Dry Run status
+        mode_str = "DRY RUN (Simulation)" if config.DRY_RUN_MODE else "LIVE RUN (Real Copy)"
+        print(f"Mode: {mode_str}")
+        
+        with DatabaseManager(self.db_path) as db:
+            migrator = Migrator(db, self.config_mgr)
+            migrator.run_migration()
+
+    def run_report(self):
+        self._print_header("Stage 5: Reporting")
+        if not self.verify_db_exists(): return
+
+        with DatabaseManager(self.db_path) as db:
+            # Console Report
+            reporter = ReportGenerator(db)
+            reporter.print_full_report()
+            
+            # HTML Dashboard
+            print("\nGenerating HTML Dashboard...")
+            html_gen = HTMLGenerator(db, self.config_mgr)
+            html_gen.generate_html_report()
+
+    def run_all(self):
+        """Executes the full pipeline in order."""
+        start_time = time.time()
+        print(f"Starting Full Pipeline Run on: {self.config_mgr.SOURCE_DIR}")
+        
+        self.run_scan()
+        self.run_metadata()
+        self.run_dedupe()
+        self.run_migrate()
+        self.run_report()
+        
+        elapsed = time.time() - start_time
+        print(f"\nPipeline Completed in {elapsed:.2f} seconds.")
 
 
 if __name__ == '__main__':
-    # 1. IMMEDIATE PATH SETUP (Needed for the subsequent version_util import)
-    project_root = Path(__file__).resolve().parent
-    # Check if the script is run from the root (common) or elsewhere.
-    if project_root not in sys.path:
-        sys.path.append(str(project_root))
-
-    parser = argparse.ArgumentParser(description="Main Pipeline Orchestrator")
+    parser = argparse.ArgumentParser(description="File Organizer Pipeline Orchestrator")
+    
+    # Mode Flags
+    parser.add_argument('--scan', action='store_true', help="Step 1: Scan source directory and hash files.")
+    parser.add_argument('--meta', action='store_true', help="Step 2: Extract rich metadata (EXIF, PDF info, etc).")
+    parser.add_argument('--dedupe', action='store_true', help="Step 3: Identify duplicates and calculate final paths.")
+    parser.add_argument('--migrate', action='store_true', help="Step 4: Copy files to output (Subject to DRY_RUN_MODE).")
+    parser.add_argument('--report', action='store_true', help="Step 5: Generate Console and HTML reports.")
+    parser.add_argument('--all', action='store_true', help="Run the FULL pipeline (Steps 1-5).")
+    
+    # Info Flags
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    parser.add_argument('--source', type=str, required=False, help="Source directory to scan.")
-    parser.add_argument('--dest', type=str, required=False, help="Destination directory for migrated files.")
     
     args = parser.parse_args()
 
+    # 1. Version Check
     if args.version:
-        from version_util import print_version_info
         print_version_info(__file__, "Main Pipeline Orchestrator")
         sys.exit(0)
 
-    # Placeholder for execution
-    default_source = Path('./input_media')
-    default_dest = Path('./organized_media')
+    # 2. Logic Execution
+    orchestrator = PipelineOrchestrator()
     
-    run_pipeline(args.source or default_source, args.dest or default_dest, Path('./metadata.sqlite'))
+    # If no flags provided, print help
+    if not any([args.scan, args.meta, args.dedupe, args.migrate, args.report, args.all]):
+        parser.print_help()
+        sys.exit(0)
+
+    if args.all:
+        orchestrator.run_all()
+    else:
+        # Allow running specific stages in sequence if multiple flags are passed
+        if args.scan: orchestrator.run_scan()
+        if args.meta: orchestrator.run_metadata()
+        if args.dedupe: orchestrator.run_dedupe()
+        if args.migrate: orchestrator.run_migrate()
+        if args.report: orchestrator.run_report()
