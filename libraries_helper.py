@@ -23,10 +23,11 @@ _CHANGELOG_ENTRIES = [
     "SYNC: Refined internal logic to support external calls for verbose vs standard metadata.",
     "BUG FIX: Changed file size extraction to return raw integers instead of formatted strings to prevent processing errors in Asset models.",
     "FEATURE UPGRADE: Added specialized extractors for PDF, Office, Ebooks, and Archives.",
-    "FEATURE UPGRADE: Added router logic to dispatch to specific extractors based on extension."
+    "FEATURE UPGRADE: Added router logic to dispatch to specific extractors based on extension.",
+    "FEATURE UPGRADE: Added support for RAW images, SVG, and PPTX metadata extraction."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.19
+# Version: 0.4.20
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -36,6 +37,7 @@ import argparse
 import importlib.metadata
 import zipfile
 import tarfile
+import xml.etree.ElementTree as ET
 
 # --- Dependency Checks ---
 try:
@@ -69,6 +71,12 @@ except ImportError:
     DOCX_AVAILABLE = False
 
 try:
+    import pptx
+    PPTX_AVAILABLE = True
+except ImportError:
+    PPTX_AVAILABLE = False
+
+try:
     import openpyxl
     XLSX_AVAILABLE = True
 except ImportError:
@@ -83,7 +91,7 @@ except ImportError:
 # --- Version Reporting ---
 def get_library_versions():
     """Returns a dictionary of relevant library versions for the project."""
-    libs = ['tqdm', 'Pillow', 'pymediainfo', 'PyPDF2', 'python-docx', 'openpyxl', 'EbookLib']
+    libs = ['tqdm', 'Pillow', 'pymediainfo', 'PyPDF2', 'python-docx', 'python-pptx', 'openpyxl', 'EbookLib']
     versions = {}
     for lib in libs:
         try:
@@ -101,6 +109,7 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     
     metadata = {}
     try:
+        # Pillow handles many RAW formats (readonly) via plugins or basic headers
         with Image.open(file_path) as img:
             metadata['Width'] = img.width
             metadata['Height'] = img.height
@@ -110,7 +119,6 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
             exif_raw = img.getexif()
             if exif_raw:
                 metadata['Exif_Tags_Count'] = len(exif_raw)
-                # Attempt to find Make/Model
                 for tag_id, value in exif_raw.items():
                     tag = ExifTags.TAGS.get(tag_id, tag_id)
                     if tag == 'Make': metadata['Make'] = str(value)
@@ -120,6 +128,18 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     except Exception as e:
         return {"Pillow_Error": str(e)}
     return metadata
+
+def extract_svg_metadata(file_path: Path) -> Dict[str, Any]:
+    """Extracts dimensions from SVG XML."""
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        meta = {}
+        if 'width' in root.attrib: meta['Width'] = root.attrib['width']
+        if 'height' in root.attrib: meta['Height'] = root.attrib['height']
+        return meta
+    except Exception as e:
+        return {"SVG_Error": str(e)}
 
 def extract_pdf_metadata(file_path: Path) -> Dict[str, Any]:
     """Extracts page count and info from PDFs."""
@@ -150,11 +170,25 @@ def extract_docx_metadata(file_path: Path) -> Dict[str, Any]:
         if props.author: metadata['Author'] = props.author
         if props.title: metadata['Title'] = props.title
         
-        # Approximate word count
         words = 0
         for para in doc.paragraphs:
             words += len(para.text.split())
         metadata['Word_Count'] = words
+    except Exception as e:
+        return {"Office_Error": str(e)}
+    return metadata
+
+def extract_pptx_metadata(file_path: Path) -> Dict[str, Any]:
+    """Extracts metadata from PowerPoint presentations."""
+    if not PPTX_AVAILABLE:
+        return {"Office_Error": "python-pptx library not installed"}
+    
+    metadata = {}
+    try:
+        prs = pptx.Presentation(file_path)
+        if prs.core_properties.author: metadata['Author'] = prs.core_properties.author
+        if prs.core_properties.title: metadata['Title'] = prs.core_properties.title
+        metadata['Slide_Count'] = len(prs.slides)
     except Exception as e:
         return {"Office_Error": str(e)}
     return metadata
@@ -184,7 +218,6 @@ def extract_archive_metadata(file_path: Path) -> Dict[str, Any]:
                 meta['Archive_Type'] = "ZIP"
         elif tarfile.is_tarfile(file_path):
             with tarfile.open(file_path, 'r') as t:
-                # getnames() is lighter than getmembers()
                 meta['File_Count'] = len(t.getnames())
                 meta['Archive_Type'] = "TAR"
         else:
@@ -198,9 +231,8 @@ def extract_ebook_metadata(file_path: Path) -> Dict[str, Any]:
     if not EBOOK_AVAILABLE:
         return {"Ebook_Error": "EbookLib not installed"}
     try:
-        book = epub.read_epub(str(file_path)) # EbookLib expects str
+        book = epub.read_epub(str(file_path)) 
         meta = {}
-        # Metadata access in EbookLib is nested
         if book.get_metadata('DC', 'title'):
             meta['Title'] = book.get_metadata('DC', 'title')[0][0]
         if book.get_metadata('DC', 'creator'):
@@ -233,14 +265,24 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
     # 2. Dispatch Logic
     specialized_meta = {}
     
-    if ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif']:
+    # Image Extensions (including RAW)
+    img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif', 
+                '.cr2', '.nef', '.arw', '.dng', '.orf']
+    
+    if ext in img_exts:
         specialized_meta = extract_image_metadata(file_path)
+    
+    elif ext == '.svg':
+        specialized_meta = extract_svg_metadata(file_path)
     
     elif ext in ['.pdf']:
         specialized_meta = extract_pdf_metadata(file_path)
         
     elif ext in ['.docx', '.doc']:
         specialized_meta = extract_docx_metadata(file_path)
+    
+    elif ext in ['.pptx']:
+        specialized_meta = extract_pptx_metadata(file_path)
         
     elif ext in ['.xlsx', '.xls']:
         specialized_meta = extract_xlsx_metadata(file_path)

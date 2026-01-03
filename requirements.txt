@@ -14,6 +14,7 @@ hachoir
 # Documents & Archives (New Support)
 PyPDF2
 python-docx
+python-pptx
 openpyxl
 EbookLib
 # Note: zipfile and tarfile are standard python libs

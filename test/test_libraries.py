@@ -2,8 +2,8 @@
 # File: test/test_libraries.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 5
-# Version: 0.3.5
+_PATCH_VERSION = 6
+# Version: 0.3.6
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -11,7 +11,8 @@ _CHANGELOG_ENTRIES = [
     "Implemented test for version reporting (get_library_versions).",
     "Implemented test for TQDM progress bar wrapper.",
     "Implemented test for Pillow metadata extraction with a non-existent file path.",
-    "Implemented test for standalone CLI version check (N06)."
+    "Implemented test for standalone CLI version check (N06).",
+    "BUG FIX: Updated error key assertions to match granular error keys (Pillow_Error) introduced in libraries_helper v0.4.19."
 ]
 # ------------------------------------------------------------------------------
 import re
@@ -81,8 +82,11 @@ class TestLibrariesHelper(unittest.TestCase):
         
         result = extract_image_metadata(non_existent_path)
         
-        self.assertIn('error', result)
-        self.assertIn('File not found', result['error'])
+        # FIX: Check for the specific error key used in implementation
+        self.assertTrue('error' in result or 'Pillow_Error' in result, "Expected error key in result")
+        
+        error_msg = result.get('error') or result.get('Pillow_Error')
+        self.assertIn('No such file', str(error_msg)) # Loose string match for OS variance
 
     @unittest.skipUnless(PIL_AVAILABLE, "Pillow library is not installed.")
     @patch('libraries_helper.Image.open')
@@ -93,8 +97,11 @@ class TestLibrariesHelper(unittest.TestCase):
         
         result = extract_image_metadata(test_path)
         
-        self.assertIn('error', result)
-        self.assertIn('Could not open or process image', result['error'])
+        # FIX: Check for the specific error key used in implementation
+        self.assertTrue('error' in result or 'Pillow_Error' in result, "Expected error key in result")
+        
+        error_msg = result.get('error') or result.get('Pillow_Error')
+        self.assertIn('Simulated corrupted file error', str(error_msg))
 
     def test_06_standalone_version_check(self):
         """
