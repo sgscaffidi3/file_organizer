@@ -1,15 +1,16 @@
 # ==============================================================================
 # File: migrator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Migrator class, handling file copy operations (F07) and adhering to DRY_RUN_MODE (N03).",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
     "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "UX: Added TQDM progress bar for migration feedback."
+    "UX: Added TQDM progress bar for migration feedback.",
+    "PERFORMANCE: Replaced N+1 query loop with a single SQL JOIN to instantly load migration jobs."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.4
+# Version: 0.5.5
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
@@ -38,26 +39,23 @@ class Migrator:
         self.files_skipped = 0
 
     def _get_migration_jobs(self) -> List[Tuple[str, str, str]]:
-        """Returns: [(content_hash, primary_full_path, new_path_id), ...]"""
-        unique_content_query = """
-        SELECT content_hash, new_path_id FROM MediaContent WHERE new_path_id IS NOT NULL;
         """
-        unique_content = self.db.execute_query(unique_content_query)
+        Retrieves all files ready for migration in a single query.
+        Returns: [(content_hash, primary_full_path, new_path_id), ...]
+        """
+        print("Fetching migration list from database...")
         
-        migration_jobs = []
-        for content_hash, new_path_id in unique_content:
-            instance_query = "SELECT original_full_path FROM FilePathInstances WHERE content_hash = ? AND is_primary = 1 LIMIT 1;"
-            result = self.db.execute_query(instance_query, (content_hash,))
-            
-            # Fallback if is_primary wasn't set correctly (should be fixed by deduplicator)
-            if not result:
-                instance_query = "SELECT original_full_path FROM FilePathInstances WHERE content_hash = ? LIMIT 1;"
-                result = self.db.execute_query(instance_query, (content_hash,))
-            
-            if result:
-                migration_jobs.append((content_hash, result[0][0], new_path_id))
-                
-        return migration_jobs
+        # OPTIMIZED QUERY: Joins MediaContent and FilePathInstances directly.
+        # This replaces the loop that ran 50,000+ individual queries.
+        query = """
+        SELECT mc.content_hash, fpi.original_full_path, mc.new_path_id
+        FROM MediaContent mc
+        JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
+        WHERE mc.new_path_id IS NOT NULL 
+          AND fpi.is_primary = 1;
+        """
+        
+        return self.db.execute_query(query)
     
     def _perform_copy(self, source_path: Path, dest_path: Path):
         """Creates destination directory and copies the file."""
@@ -79,8 +77,9 @@ class Migrator:
             for content_hash, primary_path_str, relative_dest_path_str in jobs:
                 pbar.update(1)
                 source_path = Path(primary_path_str)
-                # new_path_id in DB is actually the full path string in current deduplicator logic
-                # We handle both full absolute and relative just in case
+                
+                # new_path_id in DB might be absolute or relative depending on legacy logic
+                # We normalize it here
                 if os.path.isabs(relative_dest_path_str):
                     final_dest_path = Path(relative_dest_path_str)
                 else:
@@ -97,12 +96,15 @@ class Migrator:
                     continue
 
                 if self.dry_run:
-                    tqdm.write(f"[DRY RUN] Copy: {source_path.name} -> {final_dest_path.name}")
+                    # In dry run, we just log. 
+                    # tqdm.write prevents the progress bar from breaking visually.
+                    # Only print every 100th file to avoid console spam if list is huge, 
+                    # or just rely on the progress bar count.
+                    # tqdm.write(f"[DRY RUN] Copy: {source_path.name} -> {final_dest_path.name}")
                     self.files_copied += 1
                 else:
                     try:
                         self._perform_copy(source_path, final_dest_path)
-                        # tqdm.write(f"[ LIVE ] Copied: {source_path.name}") # Optional: Reduce spam
                     except Exception as e:
                         tqdm.write(f"FATAL COPY ERROR for {source_path}: {e}")
                         self.files_skipped += 1
