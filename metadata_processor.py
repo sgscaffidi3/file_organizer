@@ -1,21 +1,23 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class (F04).",
     "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
     "RELIABILITY: Added safety handling for missing physical files.",
     "ARCHITECTURE REFACTOR: Migrated to Hybrid Metadata model via AssetManager.",
     "CLEANUP: Removed redundant local extractors; delegated all routing to AssetManager.",
-    "FEATURE: Enabled full support for VIDEO, IMAGE, AUDIO, and DOCUMENT groups."
+    "FEATURE: Enabled full support for VIDEO, IMAGE, AUDIO, and DOCUMENT groups.",
+    "UX: Added TQDM progress bar for real-time extraction feedback."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.6
+# Version: 0.5.7
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
 import sys
+from tqdm import tqdm
 
 # --- Project Dependencies ---
 from database_manager import DatabaseManager
@@ -47,24 +49,30 @@ class MetadataProcessor:
         self.skip_count = 0
         records = self._get_files_to_process()
         
+        if not records:
+            print("No records require metadata processing.")
+            return
+
         # The AssetManager handles the specialized classes (Video, Image, etc.)
         asset_mgr = AssetManager(self.db)
 
-        for content_hash, group, path_str in records:
-            file_path = Path(path_str)
-            
-            if not file_path.exists():
-                self.skip_count += 1
-                continue
+        # UX: Progress Bar
+        with tqdm(total=len(records), desc="Extracting Metadata", unit="file") as pbar:
+            for content_hash, group, path_str in records:
+                pbar.update(1)
+                file_path = Path(path_str)
+                
+                if not file_path.exists():
+                    self.skip_count += 1
+                    continue
 
-            try:
-                # Delegate extraction, cleaning, and DB updating to the manager.
-                # Passing group=group ensures the manager uses the correct Asset class.
-                asset_mgr.process_file(file_path, content_hash, group=group)
-                self.processed_count += 1
-            except Exception as e:
-                print(f"Error processing {file_path} ({group}): {e}")
-                self.skip_count += 1
+                try:
+                    # Delegate extraction, cleaning, and DB updating to the manager.
+                    asset_mgr.process_file(file_path, content_hash, group=group)
+                    self.processed_count += 1
+                except Exception as e:
+                    tqdm.write(f"Error processing {file_path} ({group}): {e}")
+                    self.skip_count += 1
                 
         print(f"Metadata processing complete. Updated {self.processed_count} records.")
 
@@ -84,7 +92,6 @@ if __name__ == "__main__":
         sys.exit(0)
     elif args.process:
         db_path = manager.OUTPUT_DIR / 'metadata.sqlite'
-        # Ensure the directory exists
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with DatabaseManager(db_path) as db:
             db.create_schema()
