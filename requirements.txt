@@ -18,3 +18,6 @@ python-pptx
 openpyxl
 EbookLib
 # Note: zipfile and tarfile are standard python libs
+
+# Web Interface (New)
+Flask
