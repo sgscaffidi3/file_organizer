@@ -19,10 +19,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Restored Image Thumbnails in the main table.",
     "FEATURE: Added 'Report' Tab with aggregate statistics (Charts/Tables).",
     "FEATURE: Added 'Unique Files' filter mode.",
-    "FEATURE: Added Advanced Filters (Size, Date Year)."
+    "FEATURE: Added Advanced Filters (Size, Date Year).",
+    "FIX: Resolved SyntaxError (f-string backslash) for Python < 3.12 compatibility."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.3.17
+# Version: 0.3.18
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -534,8 +535,9 @@ def api_files():
         params.extend([f"%{search}%", f"%{search}%"])
     
     if f_type == 'folder' and f_val:
+        clean_val = f_val.replace('\\', '/')
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
-        params.append(f"{f_val.replace('\\','/')}/%")
+        params.append(f"{clean_val}/%")
     elif f_type == 'root':
         where.append("instr(NORM_PATH(fpi.original_relative_path), '/') = 0")
     elif f_type == 'unique':
