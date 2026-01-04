@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: main.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation.",
     "Integrated all pipeline components (scanner, processor, deduplicator, migrator).",
@@ -11,10 +11,11 @@ _CHANGELOG_ENTRIES = [
     "COMPLETE REFACTOR: Implemented full PipelineOrchestrator class.",
     "FEATURE: Integrated FileScanner, MetadataProcessor, Deduplicator, Migrator, and Generators.",
     "CLI: Added flags for --scan, --meta, --dedupe, --migrate, --report, and --all.",
-    "SAFETY: Added Database existence checks before running dependent stages."
+    "SAFETY: Added Database existence checks before running dependent stages.",
+    "FEATURE: Added --serve flag to launch the Flask Web Dashboard."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.9
+# Version: 0.5.10
 # ------------------------------------------------------------------------------
 import sys
 import argparse
@@ -37,6 +38,7 @@ try:
     from migrator import Migrator
     from report_generator import ReportGenerator
     from html_generator import HTMLGenerator
+    from server import run_server
     from version_util import print_version_info
 except ImportError as e:
     print(f"CRITICAL: Failed to import project modules. {e}")
@@ -64,7 +66,6 @@ class PipelineOrchestrator:
 
     def run_scan(self):
         self._print_header("Stage 1: File Scanning")
-        # Ensure output directory exists for DB
         self.config_mgr.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         
         with DatabaseManager(self.db_path) as db:
@@ -92,7 +93,6 @@ class PipelineOrchestrator:
         self._print_header("Stage 4: Migration (Copy)")
         if not self.verify_db_exists(): return
 
-        # Check Dry Run status
         mode_str = "DRY RUN (Simulation)" if config.DRY_RUN_MODE else "LIVE RUN (Real Copy)"
         print(f"Mode: {mode_str}")
         
@@ -105,14 +105,12 @@ class PipelineOrchestrator:
         if not self.verify_db_exists(): return
 
         with DatabaseManager(self.db_path) as db:
-            # Console Report
             reporter = ReportGenerator(db)
             reporter.print_full_report()
             
-            # HTML Dashboard
-            print("\nGenerating HTML Dashboard...")
-            html_gen = HTMLGenerator(db, self.config_mgr)
-            html_gen.generate_html_report()
+    def run_server(self):
+        self._print_header("Web Interface")
+        run_server(self.config_mgr)
 
     def run_all(self):
         """Executes the full pipeline in order."""
@@ -137,7 +135,8 @@ if __name__ == '__main__':
     parser.add_argument('--meta', action='store_true', help="Step 2: Extract rich metadata (EXIF, PDF info, etc).")
     parser.add_argument('--dedupe', action='store_true', help="Step 3: Identify duplicates and calculate final paths.")
     parser.add_argument('--migrate', action='store_true', help="Step 4: Copy files to output (Subject to DRY_RUN_MODE).")
-    parser.add_argument('--report', action='store_true', help="Step 5: Generate Console and HTML reports.")
+    parser.add_argument('--report', action='store_true', help="Step 5: Generate Console report.")
+    parser.add_argument('--serve', action='store_true', help="Step 6: Launch Web Dashboard (Flask).")
     parser.add_argument('--all', action='store_true', help="Run the FULL pipeline (Steps 1-5).")
     
     # Info Flags
@@ -145,25 +144,22 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    # 1. Version Check
     if args.version:
         print_version_info(__file__, "Main Pipeline Orchestrator")
         sys.exit(0)
 
-    # 2. Logic Execution
     orchestrator = PipelineOrchestrator()
     
-    # If no flags provided, print help
-    if not any([args.scan, args.meta, args.dedupe, args.migrate, args.report, args.all]):
+    if not any([args.scan, args.meta, args.dedupe, args.migrate, args.report, args.all, args.serve]):
         parser.print_help()
         sys.exit(0)
 
     if args.all:
         orchestrator.run_all()
     else:
-        # Allow running specific stages in sequence if multiple flags are passed
         if args.scan: orchestrator.run_scan()
         if args.meta: orchestrator.run_metadata()
         if args.dedupe: orchestrator.run_dedupe()
         if args.migrate: orchestrator.run_migrate()
         if args.report: orchestrator.run_report()
+        if args.serve: orchestrator.run_server()
