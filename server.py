@@ -28,10 +28,12 @@ _CHANGELOG_ENTRIES = [
     "REPORTING: Added Image Quality (Megapixel) breakdown.",
     "FIX: Improved Audio Bitrate parsing to handle 'kbps' strings and prevent 'Unknown' results.",
     "UX: Renamed 'Duplicates' stat to 'Redundant Copies' for clarity.",
-    "CLI: Added --version and --help support."
+    "CLI: Added --version and --help support.",
+    "FIX: Implemented special SQL logic for browsing files with no extension ('no_ext').",
+    "UX: Clarified Duplicate Table vs Stats distinction."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.26
+# Version: 0.4.28
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -188,7 +190,9 @@ HTML_TEMPLATE = """
             <div class="d-grid gap-2">
                 <button class="btn btn-outline-danger btn-sm" onclick="setFilter('dupes', 'true', this)">Show All Duplicates</button>
             </div>
-            <small class="text-muted d-block mt-2 p-2">Select a group below (Coming Soon)</small>
+            <div class="alert alert-dark mt-2 border-secondary p-2">
+                <small><i class="bi bi-info-circle-fill"></i> Note: The list below includes the <b>original</b> files plus all copies.</small>
+            </div>
         </div>
     </div>
 
@@ -212,7 +216,7 @@ HTML_TEMPLATE = """
                 <div class="stat-card"><div class="stat-label">Total Files</div><div class="stat-val" id="st-total">-</div></div>
                 <div class="stat-card"><div class="stat-label">Size</div><div class="stat-val text-info" id="st-size">-</div></div>
                 <div class="stat-card"><div class="stat-label">Redundant Copies</div><div class="stat-val text-warning" id="st-dupes">-</div></div>
-                <div class="stat-card"><div class="stat-label">Wasted</div><div class="stat-val text-danger" id="st-waste">-</div></div>
+                <div class="stat-card"><div class="stat-label">Wasted Space</div><div class="stat-val text-danger" id="st-waste">-</div></div>
             </div>
             
             <!-- Filters -->
@@ -411,6 +415,7 @@ HTML_TEMPLATE = """
         if (el) $(el).addClass('selected');
         
         let label = val || (type === 'dupes' ? 'Duplicates' : type === 'unique' ? 'Unique Files' : 'All Files');
+        if (type === 'ext' && val === 'no_ext') label = 'Files with No Extension';
         $('#view-label').text(label);
         
         switchMainView('table');
@@ -555,7 +560,6 @@ def api_files():
     
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
-        # FIXED: Logic moved out of f-string
         param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(param_val)
@@ -566,8 +570,21 @@ def api_files():
     elif f_type == 'dupes':
         where.append("fpi.content_hash IN (SELECT content_hash FROM FilePathInstances GROUP BY content_hash HAVING COUNT(*) > 1)")
     elif f_type == 'ext':
-        where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
-        params.append(f"%{f_val}")
+        if f_val == 'no_ext':
+            # Files with no dots in filename (excluding directory separators)
+            # SQLite INSTR returns 0 if not found
+            # Check just the filename part? No easy way in standard SQLite without substring
+            # Approximate: NOT LIKE '%.%' matches files without extension
+            # But we must be careful not to match folders with dots
+            # Actually, standard logic `LIKE '%.'` works for empty ext? No.
+            # Best proxy for 'no_ext' is "doesn't end with .something"
+            # We used `Path(p).suffix.lower() or "no_ext"` in Python.
+            # In SQL, we can check if it has a dot after the last slash.
+            # Simplified:
+            where.append("NORM_PATH(fpi.original_relative_path) NOT LIKE '%.%'")
+        else:
+            where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
+            params.append(f"%{f_val}")
 
     if min_size:
         where.append("mc.size >= ?")
@@ -615,7 +632,6 @@ def serve(id):
 
 @app.route('/api/report')
 def api_report():
-    """Generates a comprehensive HTML report."""
     conn = get_db()
     
     # 1. Type Distribution
@@ -739,5 +755,4 @@ if __name__ == '__main__':
         sys.exit(0)
     
     # Normal execution (usually called via main.py)
-    # If run directly without main.py, it needs a config:
     run_server(ConfigManager())
