@@ -11,10 +11,13 @@ _CHANGELOG_ENTRIES = [
     "REFACTOR: Implemented full hierarchical Folder Tree (recursive) instead of flat list.",
     "REFACTOR: Added Type/Extension browser to Sidebar.",
     "FIX: Added SQLite custom function 'NORM_PATH' to handle Windows/Linux path separator mismatches.",
-    "UX: Restored 3-Tab Sidebar (Browser, Types, Duplicates)."
+    "UX: Restored 3-Tab Sidebar (Browser, Types, Duplicates).",
+    "FIX: Switched JS event handling to ID-based lookup to fix broken buttons.",
+    "UX: Improved Tree rendering and CSS to ensure folder labels are visible.",
+    "LOGIC: Added explicit handling for 'Root Directory' vs 'All Files'."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.2.9
+# Version: 0.2.12
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -60,8 +63,8 @@ HTML_TEMPLATE = """
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     
     <style>
-        :root { --sidebar-width: 350px; --header-height: 60px; }
-        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; height: 100vh; overflow: hidden; background-color: #121212; }
+        :root { --sidebar-width: 350px; --header-height: 60px; --bg-dark: #121212; --panel: #1e1e1e; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; height: 100vh; overflow: hidden; background-color: var(--bg-dark); }
         
         /* Layout Grid */
         .wrapper { display: flex; height: 100%; width: 100%; }
@@ -69,7 +72,7 @@ HTML_TEMPLATE = """
         /* Sidebar Styling */
         #sidebar { 
             width: var(--sidebar-width); 
-            background: #1e1e1e; 
+            background: var(--panel); 
             border-right: 1px solid #333; 
             display: flex; 
             flex-direction: column; 
@@ -80,23 +83,23 @@ HTML_TEMPLATE = """
         
         /* Sidebar Tabs */
         .nav-tabs-custom { border-bottom: 1px solid #333; display: flex; }
-        .nav-item-custom { flex: 1; text-align: center; cursor: pointer; padding: 10px; color: #888; border-bottom: 2px solid transparent; font-size: 0.9rem; }
+        .nav-item-custom { flex: 1; text-align: center; cursor: pointer; padding: 12px 5px; color: #888; border-bottom: 3px solid transparent; font-size: 0.9rem; transition: all 0.2s; }
         .nav-item-custom:hover { color: #ccc; background: #2a2a2a; }
-        .nav-item-custom.active { color: #0dcaf0; border-bottom: 2px solid #0dcaf0; background: #252525; font-weight: bold; }
+        .nav-item-custom.active { color: #0dcaf0; border-bottom-color: #0dcaf0; background: #252525; font-weight: bold; }
         
         /* Sidebar Content Areas */
         .sidebar-content { flex: 1; overflow-y: auto; padding: 10px; display: none; }
         .sidebar-content.active { display: block; }
         
         /* Tree View */
-        .tree-node { padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .tree-content { cursor: pointer; padding: 4px 8px; border-radius: 4px; display: inline-block; width: 100%; color: #bbb; }
-        .tree-content:hover { background: #333; color: #fff; }
-        .tree-content.selected { background: #0d6efd; color: #fff; }
-        .tree-toggler { cursor: pointer; display: inline-block; width: 20px; text-align: center; color: #666; font-size: 0.8rem; }
+        .tree-node { margin-left: 10px; border-left: 1px solid #333; }
+        .tree-row { display: flex; align-items: center; padding: 2px 0; }
+        .tree-toggler { cursor: pointer; width: 20px; text-align: center; color: #666; font-size: 0.8rem; user-select: none; }
         .tree-toggler:hover { color: #fff; }
-        .tree-children { padding-left: 18px; display: none; border-left: 1px solid #333; margin-left: 9px; }
-        .tree-children.show { display: block; }
+        .tree-label { cursor: pointer; padding: 4px 8px; border-radius: 4px; color: #bbb; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; }
+        .tree-label:hover { background: #333; color: #fff; }
+        .tree-label.selected { background: #0d6efd; color: #fff; }
+        .tree-label i { margin-right: 6px; color: #ffc107; }
         
         /* Type List */
         .type-group { margin-bottom: 15px; }
@@ -107,10 +110,10 @@ HTML_TEMPLATE = """
         .count-badge { background: #333; padding: 1px 6px; border-radius: 10px; font-size: 0.75rem; color: #999; }
 
         /* Main Content */
-        #main { flex: 1; display: flex; flex-direction: column; background: #121212; min-width: 0; }
+        #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-dark); min-width: 0; }
         
         /* Top Bar */
-        .top-bar { height: var(--header-height); border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: #1e1e1e; }
+        .top-bar { height: var(--header-height); border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: var(--panel); }
         .current-path { font-family: monospace; color: #0dcaf0; background: #252525; padding: 4px 10px; border-radius: 4px; }
         
         /* Stats Dashboard */
@@ -126,12 +129,11 @@ HTML_TEMPLATE = """
         .dataTables_scrollBody { flex: 1; overflow-y: auto; }
         
         table.dataTable { border-collapse: separate; border-spacing: 0; width: 100% !important; }
-        table.dataTable thead th { background: #252525 !important; border-bottom: 1px solid #444 !important; color: #ccc; padding: 12px 10px; }
-        table.dataTable tbody td { background: #1e1e1e !important; border-bottom: 1px solid #333 !important; color: #ccc; padding: 8px 10px; vertical-align: middle; }
+        table.dataTable thead th { background: #252525 !important; border-bottom: 1px solid #444 !important; color: #ccc; padding: 12px 10px; position: sticky; top: 0; z-index: 10; }
+        table.dataTable tbody td { background: var(--panel) !important; border-bottom: 1px solid #333 !important; color: #ccc; padding: 8px 10px; vertical-align: middle; }
         table.dataTable tbody tr:hover td { background: #2a2a2a !important; color: #fff; }
         
         .badge-type { min-width: 60px; }
-        .thumb-preview { width: 60px; height: 40px; object-fit: cover; border-radius: 3px; background: #000; border: 1px solid #444; cursor: zoom-in; }
         
         /* Modal */
         .modal-content { background: #252525; border: 1px solid #444; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
@@ -159,6 +161,17 @@ HTML_TEMPLATE = """
         
         <!-- Tab 1: Folder Browser -->
         <div id="tab-browser" class="sidebar-content active">
+            <div class="tree-row">
+                <div class="tree-label" onclick="setFilter('all', '', this)">
+                    <i class="bi bi-globe"></i> All Files
+                </div>
+            </div>
+            <div class="tree-row">
+                <div class="tree-label" onclick="setFilter('root', '', this)">
+                    <i class="bi bi-hdd"></i> Files in Root
+                </div>
+            </div>
+            <hr style="border-color:#444; margin: 10px 0;">
             <div id="folder-tree-root">
                 <div class="text-center mt-4"><div class="spinner-border text-info" role="status"></div></div>
             </div>
@@ -174,7 +187,7 @@ HTML_TEMPLATE = """
             <div class="alert alert-dark border-secondary">
                 <small><i class="bi bi-info-circle"></i> This view shows duplicate groups. Click a group to see all copies.</small>
             </div>
-            <button class="btn btn-outline-danger w-100 mb-3" onclick="filterByDupes()">
+            <button class="btn btn-outline-danger w-100 mb-3" onclick="filterByDupes(this)">
                 <i class="bi bi-exclamation-triangle"></i> Show All Duplicates
             </button>
         </div>
@@ -223,7 +236,7 @@ HTML_TEMPLATE = """
                         <th>Path</th>
                         <th>Size</th>
                         <th>Date</th>
-                        <th>Meta</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
             </table>
@@ -241,15 +254,15 @@ HTML_TEMPLATE = """
             </div>
             <div class="modal-body row">
                 <div class="col-md-7">
-                    <div id="preview-container" class="bg-black d-flex align-items-center justify-content-center" style="min-height:400px; border-radius:4px;">
+                    <div id="preview-container" class="bg-black d-flex align-items-center justify-content-center" style="min-height:400px; border-radius:4px; height: 100%;">
                         <!-- Media injected here -->
                     </div>
                 </div>
                 <div class="col-md-5">
-                    <h6>Metadata</h6>
+                    <h6 class="text-info">Metadata</h6>
                     <pre id="modal-meta" class="json-view"></pre>
                     <div class="mt-3">
-                        <a id="download-link" href="#" class="btn btn-primary" target="_blank"><i class="bi bi-download"></i> Download / Open Original</a>
+                        <a id="download-link" href="#" class="btn btn-primary w-100" target="_blank"><i class="bi bi-download"></i> Open Original File</a>
                     </div>
                 </div>
             </div>
@@ -265,7 +278,7 @@ HTML_TEMPLATE = """
 
 <script>
     let table;
-    let currentFilter = { type: 'all', value: '' }; // type: folder, ext, dupe, all
+    let currentFilter = { type: 'all', value: '' };
 
     $(document).ready(function() {
         initStats();
@@ -297,24 +310,26 @@ HTML_TEMPLATE = """
             },
             columns: [
                 { data: 'type', render: (d) => `<span class="badge bg-secondary badge-type">${d}</span>` },
-                { data: 'name', render: (d, t, r) => `<strong>${d}</strong>` },
-                { data: 'rel_path', render: (d) => `<div class="text-truncate" style="max-width:300px; color:#888;" title="${d}">${d}</div>` },
+                { data: 'name', render: (d) => `<strong>${d}</strong>` },
+                { data: 'rel_path', render: (d) => `<div class="text-truncate" style="max-width:350px; color:#888;" title="${d}">${d}</div>` },
                 { data: 'size_str' },
                 { data: 'date', render: (d) => `<small class="text-muted">${d.split(' ')[0]}</small>` },
-                { data: null, orderable: false, render: (d, t, r) => 
-                    `<button class="btn btn-sm btn-outline-info" onclick='openModal(${JSON.stringify(r)})'><i class="bi bi-eye"></i></button>` 
+                { data: 'id', orderable: false, render: (d) => 
+                    `<button class="btn btn-sm btn-outline-info" onclick="fetchAndOpenModal(${d})"><i class="bi bi-eye"></i> View</button>` 
                 }
             ],
             pageLength: 25,
             scrollY: '50vh',
             scrollCollapse: true,
-            deferRender: true
+            deferRender: true,
+            order: [[1, 'asc']]
         });
     }
 
     // --- TREE VIEW LOGIC ---
     function initTree() {
         $.get('/api/tree', function(data) {
+            // data is nested dict
             let html = buildTreeHtml(data);
             $('#folder-tree-root').html(html);
         });
@@ -322,36 +337,38 @@ HTML_TEMPLATE = """
 
     function buildTreeHtml(node, path='') {
         let html = '';
-        // Sort keys: Folders first
         let keys = Object.keys(node).sort();
-        
-        // Root Logic
-        if (path === '') {
-            html += `<div class="tree-node"><div class="tree-content" onclick="setFilter('folder', '')"><i class="bi bi-hdd-network"></i> (Root)</div></div>`;
-        }
 
         keys.forEach(key => {
             let currentPath = path ? `${path}/${key}` : key;
             let children = node[key];
             let hasChildren = Object.keys(children).length > 0;
             
-            html += `<div class="tree-node">`;
+            // Container for this node
+            html += `<div>`;
+            
+            // Row
+            html += `<div class="tree-row">`;
             
             // Toggler
             if (hasChildren) {
+                // Generate unique ID for collapse
+                let uid = Math.random().toString(36).substr(2, 9);
                 html += `<span class="tree-toggler" onclick="toggleNode(this)">▶</span>`;
             } else {
                 html += `<span class="tree-toggler" style="opacity:0">●</span>`;
             }
             
-            // Content
-            html += `<span class="tree-content" onclick="setFilter('folder', '${currentPath}', this)">
+            // Label
+            // We use encodeURIComponent to ensure special chars in path don't break JS
+            html += `<span class="tree-label" onclick="setFilter('folder', '${encodeURIComponent(currentPath)}', this)">
                         <i class="bi bi-folder"></i> ${key}
                      </span>`;
+            html += `</div>`;
             
-            // Children Container
+            // Children Container (Hidden by default)
             if (hasChildren) {
-                html += `<div class="tree-children">${buildTreeHtml(children, currentPath)}</div>`;
+                html += `<div class="tree-node" style="display:none;">${buildTreeHtml(children, currentPath)}</div>`;
             }
             
             html += `</div>`;
@@ -360,12 +377,12 @@ HTML_TEMPLATE = """
     }
 
     function toggleNode(el) {
-        let children = $(el).siblings('.tree-children');
-        if (children.hasClass('show')) {
-            children.removeClass('show');
+        let container = $(el).parent().next('.tree-node');
+        if (container.is(':visible')) {
+            container.slideUp('fast');
             $(el).text('▶');
         } else {
-            children.addClass('show');
+            container.slideDown('fast');
             $(el).text('▼');
         }
     }
@@ -377,7 +394,6 @@ HTML_TEMPLATE = """
             for (const [group, exts] of Object.entries(data)) {
                 html += `<div class="type-group">`;
                 html += `<div class="type-header">${group}</div>`;
-                // Sort extensions by count desc
                 let sortedExts = Object.entries(exts).sort((a,b) => b[1] - a[1]);
                 
                 sortedExts.forEach(([ext, count]) => {
@@ -394,22 +410,27 @@ HTML_TEMPLATE = """
 
     // --- FILTERING ---
     function setFilter(type, value, el) {
+        // Decode value if it came from the tree
+        if (type === 'folder') value = decodeURIComponent(value);
+        
         currentFilter = { type: type, value: value };
         
         // UI Updates
-        $('.tree-content, .type-item').removeClass('selected');
+        $('.tree-label, .type-item, .nav-item-custom').removeClass('selected');
         if (el) $(el).addClass('selected');
         
-        // Update Title
+        // Title Update
         let title = value || "All Files";
         if (type === 'dupes') title = "Duplicate Files";
-        $('#active-filter-display').text(title);
+        if (type === 'root') title = "Files in Root Directory";
+        if (type === 'all') title = "All Files";
         
+        $('#active-filter-display').text(title);
         table.ajax.reload();
     }
     
-    function filterByDupes() {
-        setFilter('dupes', 'true');
+    function filterByDupes(el) {
+        setFilter('dupes', 'true', el);
     }
 
     function switchTab(tab) {
@@ -420,22 +441,30 @@ HTML_TEMPLATE = """
     }
 
     // --- MODAL ---
-    window.openModal = function(row) {
+    window.fetchAndOpenModal = function(fileId) {
+        // Fetch full details from server
+        $.get(`/api/details/${fileId}`, function(data) {
+            openModal(data);
+        });
+    }
+
+    function openModal(data) {
         // Meta
-        let meta = JSON.parse(row.metadata || "{}");
-        $('#modal-meta').text(JSON.stringify(meta, null, 4));
+        let metaObj = {};
+        try { metaObj = JSON.parse(data.metadata); } catch(e) {}
+        $('#modal-meta').text(JSON.stringify(metaObj, null, 4));
         
         // Download Link
-        let url = `/api/media/${row.id}`;
+        let url = `/api/media/${data.id}`;
         $('#download-link').attr('href', url);
         
         // Preview
         let html = '<div class="text-secondary">No Preview Available</div>';
-        if (row.type === 'IMAGE') {
-            html = `<img src="${url}" style="max-width:100%; max-height:100%;">`;
-        } else if (row.type === 'VIDEO') {
+        if (data.type === 'IMAGE') {
+            html = `<img src="${url}" style="max-width:100%; max-height:100%; object-fit:contain;">`;
+        } else if (data.type === 'VIDEO') {
             html = `<video controls autoplay style="max-width:100%; max-height:100%"><source src="${url}"></video>`;
-        } else if (row.type === 'AUDIO') {
+        } else if (data.type === 'AUDIO') {
             html = `<div style="text-align:center"><i class="bi bi-music-note-beamed" style="font-size:4rem; color:#666;"></i><br><br><audio controls src="${url}"></audio></div>`;
         }
         
@@ -460,7 +489,7 @@ def build_tree_dict(paths):
     """Converts a list of paths into a nested dictionary tree."""
     tree = {}
     for path in paths:
-        # Normalize to forward slash for consistent splitting
+        # Normalize to forward slash
         clean_path = path.replace('\\', '/')
         parts = clean_path.split('/')
         current = tree
@@ -489,16 +518,10 @@ def api_stats():
 def api_tree():
     """Returns a recursive dictionary of folders."""
     conn = get_db()
-    # Distinct relative parent folders only
-    # We use NORM_PATH custom function to ensure grouping works across OS
-    query = """
-    SELECT DISTINCT NORM_PATH(original_relative_path) 
-    FROM FilePathInstances
-    """
+    query = "SELECT DISTINCT NORM_PATH(original_relative_path) FROM FilePathInstances"
     rows = conn.execute(query).fetchall()
     conn.close()
     
-    # Extract just the folder parts
     folder_paths = set()
     for r in rows:
         p = Path(r[0]).parent
@@ -510,22 +533,42 @@ def api_tree():
 
 @app.route('/api/types')
 def api_types():
-    """Returns counts grouped by Type and Extension."""
     conn = get_db()
-    # Normalize paths to get extension correctly
     query = "SELECT mc.file_type_group, NORM_PATH(fpi.original_relative_path) FROM MediaContent mc JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash"
     rows = conn.execute(query).fetchall()
     conn.close()
     
-    data = defaultdict(lambda: defaultdict(int))
+    data = {}
     for group, path in rows:
         ext = Path(path).suffix.lower() or "no_ext"
+        if group not in data: data[group] = {}
+        if ext not in data[group]: data[group][ext] = 0
         data[group][ext] += 1
     return jsonify(data)
 
+@app.route('/api/details/<int:file_id>')
+def api_details(file_id):
+    """Fetch single file details for Modal."""
+    conn = get_db()
+    query = """
+    SELECT fpi.file_id, fpi.original_relative_path, mc.file_type_group, mc.extended_metadata
+    FROM FilePathInstances fpi
+    JOIN MediaContent mc ON fpi.content_hash = mc.content_hash
+    WHERE fpi.file_id = ?
+    """
+    row = conn.execute(query, (file_id,)).fetchone()
+    conn.close()
+    
+    if not row: return jsonify({})
+    return jsonify({
+        "id": row[0],
+        "name": Path(row[1]).name,
+        "type": row[2],
+        "metadata": row[3]
+    })
+
 @app.route('/api/files')
 def api_files():
-    """Main DataTables Endpoint."""
     conn = get_db()
     
     # DataTable Params
@@ -539,8 +582,8 @@ def api_files():
     f_val = request.args.get('filter_value', '')
 
     base_query = """
-    SELECT fpi.file_id, fpi.content_hash, fpi.original_relative_path, fpi.original_full_path,
-           mc.file_type_group, mc.size, mc.date_best, mc.extended_metadata
+    SELECT fpi.file_id, fpi.content_hash, fpi.original_relative_path, 
+           mc.file_type_group, mc.size, mc.date_best
     FROM FilePathInstances fpi
     JOIN MediaContent mc ON fpi.content_hash = mc.content_hash
     """
@@ -555,14 +598,17 @@ def api_files():
         
     # Filters
     if f_type == 'folder':
-        # Startswith logic for folders. Normalize both DB and Input.
         if f_val:
             clean_val = f_val.replace('\\', '/')
+            # Ensure filtering matches only inside this folder (and subfolders)
             where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
             params.append(f"{clean_val}/%")
-    
+            
+    elif f_type == 'root':
+        # Files where the relative path has no slashes (top level)
+        where.append("instr(NORM_PATH(fpi.original_relative_path), '/') = 0")
+        
     elif f_type == 'ext':
-        # Ends with extension
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(f"%{f_val}")
         
@@ -573,15 +619,22 @@ def api_files():
         base_query += " WHERE " + " AND ".join(where)
         
     # Totals
-    total_records = conn.execute("SELECT COUNT(*) FROM FilePathInstances").fetchone()[0]
-    count_sql = f"SELECT COUNT(*) FROM ({base_query})"
-    filtered_records = conn.execute(count_sql, params).fetchone()[0]
-    
-    # Sort & Paginate
-    base_query += " LIMIT ? OFFSET ?"
-    params.extend([length, start])
-    
-    rows = conn.execute(base_query, params).fetchall()
+    try:
+        total_records = conn.execute("SELECT COUNT(*) FROM FilePathInstances").fetchone()[0]
+        count_sql = f"SELECT COUNT(*) FROM ({base_query})"
+        filtered_records = conn.execute(count_sql, params).fetchone()[0]
+        
+        # Sort & Paginate
+        base_query += " LIMIT ? OFFSET ?"
+        params.extend([length, start])
+        
+        rows = conn.execute(base_query, params).fetchall()
+    except Exception as e:
+        print(f"Query Error: {e}")
+        rows = []
+        filtered_records = 0
+        total_records = 0
+
     conn.close()
     
     data = []
@@ -590,13 +643,11 @@ def api_files():
             "id": r[0],
             "hash": r[1],
             "rel_path": r[2],
-            "full_path": r[3],
             "name": Path(r[2]).name,
-            "type": r[4],
-            "size": r[5],
-            "size_str": format_size(r[5]),
-            "date": r[6] or "Unknown",
-            "metadata": r[7]
+            "type": r[3],
+            "size": r[4],
+            "size_str": format_size(r[4]),
+            "date": r[5] or "Unknown"
         })
         
     return jsonify({
@@ -613,7 +664,6 @@ def serve_media(file_id):
     conn.close()
     if not row or not os.path.exists(row[0]): abort(404)
     
-    # Determine mimetype (video/mp4, image/jpeg, etc)
     mime, _ = mimetypes.guess_type(row[0])
     return send_file(row[0], mimetype=mime)
 
@@ -628,5 +678,4 @@ def run_server(config_manager):
     app.run(port=5000, debug=False)
 
 if __name__ == '__main__':
-    # Test mode
     pass
