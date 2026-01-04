@@ -23,10 +23,11 @@ _CHANGELOG_ENTRIES = [
     "FIX: Resolved SyntaxError (f-string backslash) for Python < 3.12 compatibility.",
     "REPORTING: Implemented Comprehensive Analysis (Res/Quality/Bitrate) in /api/report.",
     "FIX: Corrected logic for Duplicate vs Redundant counts.",
-    "FIX: Improved extension normalization in Sidebar counts."
+    "FIX: Improved extension normalization in Sidebar counts.",
+    "FIX: Resolved f-string backslash SyntaxError (again) by moving replacement logic out."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.21
+# Version: 0.4.22
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -487,10 +488,8 @@ def api_stats():
     conn = get_db()
     total = conn.execute("SELECT COUNT(*) FROM FilePathInstances").fetchone()[0]
     size = conn.execute("SELECT SUM(size) FROM MediaContent").fetchone()[0] or 0
-    # Wasted = Sum of size of non-primary copies
     wasted = conn.execute("SELECT SUM(mc.size) FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash=mc.content_hash WHERE fpi.is_primary=0").fetchone()[0] or 0
-    # Redundant Count = Count of non-primary copies
-    dupes = conn.execute("SELECT COUNT(*) FROM FilePathInstances WHERE is_primary=0").fetchone()[0]
+    dupes = conn.execute("SELECT COUNT(*) FROM (SELECT content_hash FROM FilePathInstances GROUP BY content_hash HAVING COUNT(*) > 1)").fetchone()[0]
     conn.close()
     return jsonify({'total_files': total, 'total_size': format_size(size), 'duplicates': dupes, 'wasted_size': format_size(wasted)})
 
@@ -508,7 +507,7 @@ def api_tree():
 @app.route('/api/types')
 def api_types():
     conn = get_db()
-    # Count ALL instances (Total Files) grouped by type
+    # Corrected: Join fpi to get total instance count, not just unique files
     rows = conn.execute("SELECT mc.file_type_group, NORM_PATH(fpi.original_relative_path) FROM MediaContent mc JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash").fetchall()
     conn.close()
     data = {}
@@ -527,7 +526,7 @@ def api_files():
     length = int(args.get('length', 25))
     search = args.get('search[value]', '').lower()
     
-    # Sort Logic
+    # Sort
     col_idx = args.get('order[0][column]')
     col_dir = args.get('order[0][dir]', 'asc')
     col_map = {0:'mc.file_type_group', 2:'fpi.original_relative_path', 4:'mc.size', 5:'mc.date_best'}
@@ -550,14 +549,16 @@ def api_files():
         params.extend([f"%{search}%", f"%{search}%"])
     
     if f_type == 'folder' and f_val:
+        clean_val = f_val.replace('\\', '/')
+        # FIXED SYNTAX ERROR: Move string logic out of f-string
+        param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
-        params.append(f"{f_val.replace('\\','/')}/%")
+        params.append(param_val)
     elif f_type == 'root':
         where.append("instr(NORM_PATH(fpi.original_relative_path), '/') = 0")
     elif f_type == 'unique':
         where.append("fpi.is_primary = 1")
     elif f_type == 'dupes':
-        # Show all files that are part of a duplicate group
         where.append("fpi.content_hash IN (SELECT content_hash FROM FilePathInstances GROUP BY content_hash HAVING COUNT(*) > 1)")
     elif f_type == 'ext':
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
@@ -609,56 +610,80 @@ def serve(id):
 
 @app.route('/api/report')
 def api_report():
-    """Generates a comprehensive HTML report."""
     conn = get_db()
     
     # 1. Type Distribution
     type_data = conn.execute("""
         SELECT mc.file_type_group, COUNT(*), SUM(mc.size)
         FROM MediaContent mc
+        JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
         GROUP BY mc.file_type_group
     """).fetchall()
     
-    type_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Category</th><th>Unique Files</th><th>Total Size</th></tr></thead><tbody>'
+    type_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Category</th><th>Total Files</th><th>Total Size</th></tr></thead><tbody>'
     for grp, count, size in type_data:
-        type_html += f"<tr><td>{grp}</td><td>{count}</td><td>{format_size(size)}</td></tr>"
+        type_html += f"<tr><td>{grp}</td><td>{count:,}</td><td>{format_size(size)}</td></tr>"
     type_html += '</tbody></table>'
 
-    # 2. Extension Breakdown
-    ext_html = '<table class="table table-dark table-sm table-striped report-table"><thead><tr><th>Extension</th><th>Count</th><th>Size</th></tr></thead><tbody>'
-    # Hacky aggregation in Python for extensions
-    rows = conn.execute("SELECT NORM_PATH(fpi.original_relative_path), mc.size FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash=mc.content_hash").fetchall()
+    # 2. Extension Breakdown (Top 20)
+    ext_data = conn.execute("""
+        SELECT NORM_PATH(fpi.original_relative_path), mc.size 
+        FROM FilePathInstances fpi 
+        JOIN MediaContent mc ON fpi.content_hash = mc.content_hash
+    """).fetchall()
+    
     ext_stats = defaultdict(lambda: {'count': 0, 'size': 0})
-    for p, s in rows:
+    for p, s in ext_data:
         ext = Path(p).suffix.lower() or "No Ext"
         ext_stats[ext]['count'] += 1
         ext_stats[ext]['size'] += s
     
-    for ext, stats in sorted(ext_stats.items(), key=lambda x: x[1]['size'], reverse=True):
-        ext_html += f"<tr><td>{ext}</td><td>{stats['count']}</td><td>{format_size(stats['size'])}</td></tr>"
+    ext_html = '<table class="table table-dark table-sm table-striped report-table"><thead><tr><th>Extension</th><th>Count</th><th>Size</th></tr></thead><tbody>'
+    for ext, stats in sorted(ext_stats.items(), key=lambda x: x[1]['size'], reverse=True)[:20]:
+        ext_html += f"<tr><td>{ext}</td><td>{stats['count']:,}</td><td>{format_size(stats['size'])}</td></tr>"
     ext_html += '</tbody></table>'
 
-    # 3. Top Duplicates
-    dupes = conn.execute("""
-        SELECT mc.size, COUNT(*), fpi.content_hash 
-        FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash=mc.content_hash 
-        GROUP BY fpi.content_hash HAVING COUNT(*) > 1 
-        ORDER BY (mc.size * COUNT(*)) DESC LIMIT 10
-    """).fetchall()
-    
-    dupe_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Size (each)</th><th>Count</th><th>Total Wasted</th></tr></thead><tbody>'
-    for size, count, h in dupes:
-        total = size * (count - 1)
-        dupe_html += f"<tr><td>{format_size(size)}</td><td>{count}</td><td class='text-danger'>{format_size(total)}</td></tr>"
-    dupe_html += '</tbody></table>'
-    
+    # 3. Video Quality (Resolution)
+    res_data = conn.execute("SELECT height FROM MediaContent WHERE file_type_group='VIDEO'").fetchall()
+    res_stats = {'4K+':0, '1080p':0, '720p':0, 'SD':0, 'Unknown':0}
+    for r in res_data:
+        h = r[0]
+        if not h: res_stats['Unknown'] += 1
+        elif h >= 2160: res_stats['4K+'] += 1
+        elif h >= 1080: res_stats['1080p'] += 1
+        elif h >= 720: res_stats['720p'] += 1
+        else: res_stats['SD'] += 1
+        
+    res_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Resolution</th><th>Count</th></tr></thead><tbody>'
+    for k, v in res_stats.items():
+        if v > 0: res_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
+    res_html += '</tbody></table>'
+
+    # 4. Audio Quality (Bitrate)
+    aud_data = conn.execute("SELECT bitrate FROM MediaContent WHERE file_type_group='AUDIO'").fetchall()
+    aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0, 'Unknown':0}
+    for r in aud_data:
+        try:
+            # Bitrate might be string "320000" or int
+            b = int(str(r[0]).replace(' bps',''))
+            if b >= 256000: aud_stats['High (>256k)'] += 1
+            elif b >= 128000: aud_stats['Standard (128k+)'] += 1
+            else: aud_stats['Low (<128k)'] += 1
+        except: aud_stats['Unknown'] += 1
+
+    aud_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Quality</th><th>Count</th></tr></thead><tbody>'
+    for k, v in aud_stats.items():
+        if v > 0: aud_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
+    aud_html += '</tbody></table>'
+
     conn.close()
     
     full_html = f"""
-    <div class="row">
-        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Content Categories</h4>{type_html}</div></div>
-        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Largest Duplicates</h4>{dupe_html}</div></div>
-        <div class="col-12"><div class="report-card"><h4 class="report-title">Detailed Extension Statistics</h4>{ext_html}</div></div>
+    <div class="row g-4">
+        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Content Overview</h4>{type_html}</div></div>
+        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Top 20 Extensions (by Size)</h4>{ext_html}</div></div>
+        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Video Resolution</h4>{res_html}</div></div>
+        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Audio Quality</h4>{aud_html}</div></div>
     </div>
     """
     return full_html
