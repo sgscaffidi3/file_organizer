@@ -24,15 +24,21 @@ _CHANGELOG_ENTRIES = [
     "REPORTING: Implemented Comprehensive Analysis (Res/Quality/Bitrate) in /api/report.",
     "FIX: Corrected logic for Duplicate vs Redundant counts.",
     "FIX: Improved extension normalization in Sidebar counts.",
-    "FIX: Resolved f-string backslash SyntaxError (again) by moving replacement logic out."
+    "FIX: Resolved f-string backslash SyntaxError (again) by moving replacement logic out.",
+    "REPORTING: Added Image Quality (Megapixel) breakdown.",
+    "FIX: Improved Audio Bitrate parsing to handle 'kbps' strings and prevent 'Unknown' results.",
+    "UX: Renamed 'Duplicates' stat to 'Redundant Copies' for clarity.",
+    "CLI: Added --version and --help support."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.22
+# Version: 0.4.26
 # ------------------------------------------------------------------------------
 import os
 import json
 import sqlite3
 import mimetypes
+import argparse
+import sys
 from pathlib import Path
 from collections import defaultdict
 from flask import Flask, render_template_string, request, jsonify, send_file, abort
@@ -205,7 +211,7 @@ HTML_TEMPLATE = """
             <div class="stats-row">
                 <div class="stat-card"><div class="stat-label">Total Files</div><div class="stat-val" id="st-total">-</div></div>
                 <div class="stat-card"><div class="stat-label">Size</div><div class="stat-val text-info" id="st-size">-</div></div>
-                <div class="stat-card"><div class="stat-label">Redundant</div><div class="stat-val text-warning" id="st-dupes">-</div></div>
+                <div class="stat-card"><div class="stat-label">Redundant Copies</div><div class="stat-val text-warning" id="st-dupes">-</div></div>
                 <div class="stat-card"><div class="stat-label">Wasted</div><div class="stat-val text-danger" id="st-waste">-</div></div>
             </div>
             
@@ -489,7 +495,7 @@ def api_stats():
     total = conn.execute("SELECT COUNT(*) FROM FilePathInstances").fetchone()[0]
     size = conn.execute("SELECT SUM(size) FROM MediaContent").fetchone()[0] or 0
     wasted = conn.execute("SELECT SUM(mc.size) FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash=mc.content_hash WHERE fpi.is_primary=0").fetchone()[0] or 0
-    dupes = conn.execute("SELECT COUNT(*) FROM (SELECT content_hash FROM FilePathInstances GROUP BY content_hash HAVING COUNT(*) > 1)").fetchone()[0]
+    dupes = conn.execute("SELECT COUNT(*) FROM FilePathInstances WHERE is_primary=0").fetchone()[0]
     conn.close()
     return jsonify({'total_files': total, 'total_size': format_size(size), 'duplicates': dupes, 'wasted_size': format_size(wasted)})
 
@@ -507,7 +513,6 @@ def api_tree():
 @app.route('/api/types')
 def api_types():
     conn = get_db()
-    # Corrected: Join fpi to get total instance count, not just unique files
     rows = conn.execute("SELECT mc.file_type_group, NORM_PATH(fpi.original_relative_path) FROM MediaContent mc JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash").fetchall()
     conn.close()
     data = {}
@@ -550,7 +555,7 @@ def api_files():
     
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
-        # FIXED SYNTAX ERROR: Move string logic out of f-string
+        # FIXED: Logic moved out of f-string
         param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(param_val)
@@ -610,6 +615,7 @@ def serve(id):
 
 @app.route('/api/report')
 def api_report():
+    """Generates a comprehensive HTML report."""
     conn = get_db()
     
     # 1. Type Distribution
@@ -659,13 +665,38 @@ def api_report():
         if v > 0: res_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
     res_html += '</tbody></table>'
 
-    # 4. Audio Quality (Bitrate)
+    # 4. Image Quality (Megapixels)
+    img_data = conn.execute("SELECT width, height FROM MediaContent WHERE file_type_group='IMAGE'").fetchall()
+    img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0, 'Unknown':0}
+    for w, h in img_data:
+        if not w or not h:
+            img_stats['Unknown'] += 1
+            continue
+        mp = (w * h) / 1_000_000
+        if mp >= 20: img_stats['Pro (>20 MP)'] += 1
+        elif mp >= 12: img_stats['High (12-20 MP)'] += 1
+        elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
+        else: img_stats['Low (<2 MP)'] += 1
+
+    img_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Quality (Megapixels)</th><th>Count</th></tr></thead><tbody>'
+    for k, v in img_stats.items():
+        if v > 0: img_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
+    img_html += '</tbody></table>'
+
+    # 5. Audio Quality (Bitrate)
     aud_data = conn.execute("SELECT bitrate FROM MediaContent WHERE file_type_group='AUDIO'").fetchall()
     aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0, 'Unknown':0}
     for r in aud_data:
         try:
-            # Bitrate might be string "320000" or int
-            b = int(str(r[0]).replace(' bps',''))
+            val = str(r[0]).lower()
+            if not val or val == 'none':
+                aud_stats['Unknown'] += 1
+                continue
+            # Remove units
+            val = val.replace('bps','').replace('kb/s','000').replace('k','000').strip()
+            # Handle float strings "320000.0"
+            b = int(float(val))
+            
             if b >= 256000: aud_stats['High (>256k)'] += 1
             elif b >= 128000: aud_stats['Standard (128k+)'] += 1
             else: aud_stats['Low (<128k)'] += 1
@@ -682,8 +713,9 @@ def api_report():
     <div class="row g-4">
         <div class="col-md-6"><div class="report-card"><h4 class="report-title">Content Overview</h4>{type_html}</div></div>
         <div class="col-md-6"><div class="report-card"><h4 class="report-title">Top 20 Extensions (by Size)</h4>{ext_html}</div></div>
-        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Video Resolution</h4>{res_html}</div></div>
-        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Audio Quality</h4>{aud_html}</div></div>
+        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Image Quality</h4>{img_html}</div></div>
+        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Video Resolution</h4>{res_html}</div></div>
+        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Audio Quality</h4>{aud_html}</div></div>
     </div>
     """
     return full_html
@@ -696,4 +728,16 @@ def run_server(config_manager):
     print("Starting Dashboard on http://127.0.0.1:5000")
     app.run(port=5000, debug=False)
 
-if __name__ == '__main__': pass
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Media Organizer Web Server")
+    parser.add_argument('-v', '--version', action='store_true', help='Show version info.')
+    args = parser.parse_args()
+
+    if args.version:
+        from version_util import print_version_info
+        print_version_info(__file__, "Web Server")
+        sys.exit(0)
+    
+    # Normal execution (usually called via main.py)
+    # If run directly without main.py, it needs a config:
+    run_server(ConfigManager())
