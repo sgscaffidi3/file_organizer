@@ -61,10 +61,11 @@ _CHANGELOG_ENTRIES = [
     "DEBUG: Simplified stderr handling to write directly to sys.stderr for immediate feedback.",
     "PERFORMANCE: Removed -analyzeduration/-probesize flags which were causing startup hangs on large files.",
     "CRITICAL FIX: Set `cwd` in subprocess to FFmpeg binary directory to ensure DLLs are found.",
-    "FEATURE: Added `ffprobe` detection and HEVC/H.265 detection to force transcoding for 'Audio Only' MP4s."
+    "FEATURE: Added `ffprobe` detection and HEVC/H.265 detection to force transcoding for 'Audio Only' MP4s.",
+    "COMPATIBILITY: Added .mpg, .mpeg, and .mpe to mandatory transcoding list."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.62
+# Version: 0.10.63
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -227,7 +228,8 @@ def needs_transcoding(path_obj):
     ext = path_obj.suffix.lower()
     
     # 1. Always transcode unsupported containers
-    if ext in ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts', '.3gp']:
+    # Added .mpg, .mpeg, .mpe
+    if ext in ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts', '.3gp', '.mpg', '.mpeg', '.mpe']:
         return True
     
     # 2. For MP4/MOV, check if it's HEVC (H.265)
@@ -559,7 +561,7 @@ def api_report():
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1000000
+        mp = (w * h) / 1_000_000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
