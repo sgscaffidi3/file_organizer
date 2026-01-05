@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: migrator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 8
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Migrator class, handling file copy operations (F07) and adhering to DRY_RUN_MODE (N03).",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
@@ -10,10 +10,12 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Replaced N+1 query loop with a single SQL JOIN to instantly load migration jobs.",
     "FEATURE: Implemented 'Clean Database Export'. Creates a new SQLite DB reflecting the organized structure.",
     "LOGIC: Added automatic 'clean_index.sqlite' generation during Live Run.",
-    "FEATURE: Inject 'Original_Filename' and 'Source_Copies' list into extended_metadata for Clean DB export."
+    "FEATURE: Inject 'Original_Filename' and 'Source_Copies' list into extended_metadata for Clean DB export.",
+    "BUG FIX: Fixed path concatenation logic to prevent double-nesting of output directory (e.g. output/output/2020).",
+    "UX: Cleaned up relative paths in exported DB so Tree View starts at the Year."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.7.8
+# Version: 0.8.10
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -34,8 +36,7 @@ class Migrator:
     """
     Manages the physical file migration process (F07).
     Copies the primary copy of each unique file to its final calculated destination.
-    Also generates a new 'Clean' database reflecting the organized structure,
-    preserving history (original names/paths) in the metadata.
+    Also generates a new 'Clean' database reflecting the organized structure.
     """
 
     def __init__(self, db_manager: DatabaseManager, config_manager: ConfigManager):
@@ -121,16 +122,14 @@ class Migrator:
             print(f" Export DB: {self.clean_db_path}")
         print("-" * 60)
 
-        # Pre-fetch duplicates history only if we are actually exporting
+        # Pre-fetch duplicates history
         path_history = {}
         if not self.dry_run:
             path_history = self._build_path_history_map()
 
-        # Buffer for new DB records
         new_content_records = []
         new_instance_records = []
         
-        # Setup Clean DB connection (Live only)
         clean_db_mgr = None
         if not self.dry_run:
             clean_db_mgr = self._initialize_clean_db()
@@ -139,18 +138,26 @@ class Migrator:
             for job in jobs:
                 pbar.update(1)
                 
-                # Unpack Query Result
                 (c_hash, src_str, dest_rel_str, f_group, f_size, f_date, f_meta, f_w, f_h, f_dur, f_bit) = job
                 
                 source_path = Path(src_str)
                 
-                # Normalize destination
-                if os.path.isabs(dest_rel_str):
-                    final_dest_path = Path(dest_rel_str)
-                    rel_path = str(final_dest_path.relative_to(self.output_dir))
-                else:
-                    final_dest_path = self.output_dir / Path(dest_rel_str)
-                    rel_path = dest_rel_str
+                # --- PATH LOGIC FIX ---
+                # dest_rel_str (from Deduplicator) typically looks like: "organized_output/2024/01/file.jpg"
+                # We need to treat it as authoritative relative to CWD.
+                
+                # 1. Determine Physical Destination
+                # We trust that dest_rel_str includes the output_dir prefix if the Deduplicator put it there.
+                final_dest_path = Path(dest_rel_str).resolve()
+                
+                # 2. Determine "Clean" Relative Path (For the Tree View)
+                # We want the tree to start at "2024", not "organized_output"
+                try:
+                    # Strip the output_dir prefix for the database
+                    clean_rel_path = str(final_dest_path.relative_to(self.config.OUTPUT_DIR.resolve()))
+                except ValueError:
+                    # Fallback if path isn't inside output dir for some reason
+                    clean_rel_path = dest_rel_str
 
                 # 1. Validation
                 if not source_path.exists():
@@ -159,8 +166,8 @@ class Migrator:
                     continue
                 
                 if final_dest_path.exists():
+                    # Destination collision
                     self.files_skipped += 1
-                    # Skip COPY, but proceed to DB record creation so the DB is complete
                 else:
                     # 2. Physical Copy
                     if self.dry_run:
@@ -171,11 +178,10 @@ class Migrator:
                         except Exception as e:
                             tqdm.write(f"ERROR Copying {source_path.name}: {e}")
                             self.files_skipped += 1
-                            continue # Don't add failed copies to DB
+                            continue 
 
                 # 3. Prepare Clean DB Records (Live Only)
                 if not self.dry_run:
-                    # Enrich Metadata with History
                     try:
                         meta_dict = json.loads(f_meta) if f_meta else {}
                     except:
@@ -184,28 +190,23 @@ class Migrator:
                     # INJECT HISTORY
                     meta_dict['Original_Filename'] = source_path.name
                     meta_dict['Source_Copies'] = path_history.get(c_hash, [])
-                    
                     enriched_meta_json = json.dumps(meta_dict)
 
-                    # MediaContent Record
                     new_content_records.append((
                         c_hash, f_size, f_group, f_date, f_w, f_h, f_dur, f_bit, enriched_meta_json, str(final_dest_path)
                     ))
                     
-                    # FilePathInstance Record (Pointing to the NEW location)
                     new_instance_records.append((
                         c_hash, 
-                        str(final_dest_path),       # path (UNIQUE)
-                        str(final_dest_path),       # original_full_path (now the organized path)
-                        rel_path,                   # original_relative_path
-                        1                           # is_primary (Always 1 in clean DB)
+                        str(final_dest_path),       # path
+                        str(final_dest_path),       # original_full_path
+                        clean_rel_path,             # original_relative_path (Now clean: 2024/01/img.jpg)
+                        1                           # is_primary
                     ))
 
-        # 4. Commit to Clean DB (Live Only)
+        # 4. Commit to Clean DB
         if not self.dry_run and clean_db_mgr:
             print("\nGenerating Clean Index Database...")
-            
-            # Batch Insert Content
             q_content = """
             INSERT OR IGNORE INTO MediaContent 
             (content_hash, size, file_type_group, date_best, width, height, duration, bitrate, extended_metadata, new_path_id)
@@ -213,7 +214,6 @@ class Migrator:
             """
             clean_db_mgr.execute_many(q_content, new_content_records)
             
-            # Batch Insert Instances
             q_instance = """
             INSERT OR IGNORE INTO FilePathInstances
             (content_hash, path, original_full_path, original_relative_path, is_primary)
@@ -229,7 +229,7 @@ class Migrator:
         print(f"  Copied/Verified: {self.files_copied}")
         print(f"  Skipped/Errors:  {self.files_skipped}")
         if not self.dry_run:
-            print(f"\nTo view the organized collection:")
+            print(f"\n✅ TO VIEW THE ORGANIZED COLLECTION:")
             print(f"python main.py --serve --db \"{self.clean_db_path}\"")
         print("-" * 60)
 
