@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: file_scanner.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 7
 _CHANGELOG_ENTRIES = [
     "Initial implementation of high-performance file hashing and scanning logic (F01).",
     "Implemented incremental hashing using SHA256 (N01).",
@@ -18,10 +18,11 @@ _CHANGELOG_ENTRIES = [
     "REVERT: Removed nested byte-level progress bar as per user request.",
     "PERFORMANCE: Implemented RAM Cache for _check_if_known_and_unchanged to enable Fast Resume.",
     "UX: Re-implemented Nested Byte-Level Progress Bar for large file visibility.",
-    "PERFORMANCE: Implemented Multithreaded Hashing using ThreadPoolExecutor (producer-consumer model)."
+    "PERFORMANCE: Implemented Multithreaded Hashing using ThreadPoolExecutor (producer-consumer model).",
+    "UX: Implemented Position Pool to allow multiple progress bars (one per thread) simultaneously."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.6.16
+# Version: 0.7.17
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, List, Tuple, Set
@@ -32,6 +33,8 @@ import argparse
 import sys
 import sqlite3
 import concurrent.futures
+import queue
+import threading
 from tqdm import tqdm
 
 from database_manager import DatabaseManager
@@ -50,7 +53,7 @@ class FileScanner:
     """
     Traverses a source directory, generates SHA256 hashes for media content,
     and inserts records into the database.
-    Uses Multithreading for hashing to maximize throughput.
+    Uses Multithreading with visual feedback for each thread.
     """
     def __init__(self, db: DatabaseManager, source_dir: Path, file_groups: Dict[str, List[str]]):
         self.db = db
@@ -59,6 +62,13 @@ class FileScanner:
         self.files_scanned_count = 0
         self.files_inserted_count = 0
         self.known_files_cache: Dict[str, Tuple[str, int]] = {} 
+        
+        # Position Management for Multithreaded UI
+        self.max_workers = config.HASHING_THREADS
+        self.position_pool = queue.Queue()
+        # Fill pool with positions 1..max_workers (0 is reserved for main bar)
+        for i in range(1, self.max_workers + 1):
+            self.position_pool.put(i)
 
     def _get_file_type_group(self, file_path: Path) -> str:
         ext = file_path.suffix.lower()
@@ -79,16 +89,40 @@ class FileScanner:
         except sqlite3.Error:
             print("Cache load failed (likely empty DB).")
 
-    def _calculate_sha256(self, file_path: Path) -> str:
-        """Calculates hash. (Running in Worker Thread)"""
+    def _calculate_sha256_worker(self, args):
+        """
+        Worker function to hash a file.
+        Acquires a UI slot (position) to draw its own progress bar.
+        """
+        file_path, file_size = args
         hasher = hashlib.sha256()
+        
+        # Acquire a visual slot (Block until one is available, though thread pool limits active count anyway)
+        position = self.position_pool.get()
+        
         try:
-            with open(file_path, 'rb') as f:
-                while chunk := f.read(config.BLOCK_SIZE):
-                    hasher.update(chunk)
+            with tqdm(
+                total=file_size, 
+                unit='B', 
+                unit_scale=True, 
+                unit_divisor=1024, 
+                desc=f"T{position}: {file_path.name[:15]}", 
+                position=position, 
+                leave=False # Clear bar when done to reuse slot cleanly
+            ) as pbar:
+                with open(file_path, 'rb') as f:
+                    while chunk := f.read(config.BLOCK_SIZE):
+                        hasher.update(chunk)
+                        pbar.update(len(chunk))
             return hasher.hexdigest()
-        except Exception:
+            
+        except Exception as e:
+            # Move cursor to bottom to print error safely
+            # tqdm.write(f"Error reading file {file_path}: {e}") 
             return None
+        finally:
+            # Return the slot to the pool
+            self.position_pool.put(position)
 
     def _check_if_known_and_unchanged(self, file_path: Path, file_stat: os.stat_result) -> bool:
         path_str = str(file_path)
@@ -133,6 +167,7 @@ class FileScanner:
                 if self._check_if_known_and_unchanged(full_path, file_stat):
                     continue
                 
+                # Tuple: (Path, Stat, Group)
                 files_to_process.append((full_path, file_stat, file_type_group))
 
         print(f"Files requiring hashing: {len(files_to_process)}")
@@ -142,32 +177,34 @@ class FileScanner:
             return
 
         # 2. Multithreaded Hashing
-        # Use simple number of cores
-        max_workers = os.cpu_count() or 4
-        print(f"Spinning up {max_workers} threads for hashing...")
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Map futures
+        print(f"Spinning up {self.max_workers} threads for hashing...")
+        print("NOTE: If system becomes sluggish, reduce HASHING_THREADS in config.py")
+        print("\n" * (self.max_workers + 1)) # Clear space for the bars
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit tasks
+            # We map future -> original data so we know what file it was
             future_to_file = {
-                executor.submit(self._calculate_sha256, f_path): (f_path, f_stat, f_group) 
+                executor.submit(self._calculate_sha256_worker, (f_path, f_stat.st_size)): (f_path, f_stat, f_group) 
                 for f_path, f_stat, f_group in files_to_process
             }
             
-            with tqdm(total=len(files_to_process), desc="Hashing", unit="file") as pbar:
+            # Position 0 is for the Overall Progress
+            with tqdm(total=len(files_to_process), desc="Total Progress", position=0) as pbar_main:
                 for future in concurrent.futures.as_completed(future_to_file):
                     f_path, f_stat, f_group = future_to_file[future]
-                    pbar.update(1)
+                    pbar_main.update(1)
                     
                     try:
                         content_hash = future.result()
                     except Exception as e:
-                        tqdm.write(f"Hashing error {f_path}: {e}")
                         continue
                         
                     if not content_hash:
                         continue
 
-                    # 3. Database Write (Main Thread - SQLite is sequential)
+                    # 3. Database Write (Sequential, Main Thread)
+                    # We do this here to avoid DB locking issues with threads
                     full_path_str = str(f_path)
                     relative_path_str = str(f_path.relative_to(self.source_dir))
                     date_modified_str = datetime.datetime.fromtimestamp(f_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
@@ -184,9 +221,10 @@ class FileScanner:
                         )
                         if isinstance(res, int) and res > 0:
                             self.files_inserted_count += 1
-                    except sqlite3.Error as e:
-                        if 'UNIQUE' not in str(e):
-                            tqdm.write(f"DB Error: {e}")
+                            # Update RAM cache immediately
+                            self.known_files_cache[full_path_str] = (date_modified_str, f_stat.st_size)
+                    except sqlite3.Error:
+                        pass
 
         print(f"\nScan complete. Total files scanned: {self.files_scanned_count}, new recorded: {self.files_inserted_count}")
 
