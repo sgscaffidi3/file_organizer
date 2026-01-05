@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -27,10 +27,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE UPGRADE: Added support for RAW images, SVG, and PPTX metadata extraction.",
     "FEATURE UPGRADE: Added 'pillow-heif' registration for .HEIC support.",
     "DATA INTEGRITY: Updated MediaInfo extractor to return RAW INTEGERS for BitRate, Duration, Width, Height (Fixes sorting/reporting).",
-    "ROBUSTNESS: Added automatic fallback to MediaInfo for HEIC files if Pillow/pillow-heif fails."
+    "ROBUSTNESS: Added automatic fallback to MediaInfo for HEIC files if Pillow/pillow-heif fails.",
+    "FIX: Routed RAW images (.NEF, .CR2) to MediaInfo for Metadata. Pillow only reads thumbnails (160x120), MediaInfo reads true dimensions."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.23
+# Version: 0.6.24
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -52,7 +53,6 @@ except ImportError:
 try:
     from PIL import Image, ExifTags
     PIL_AVAILABLE = True
-    # Try HEIC support
     try:
         from pillow_heif import register_heif_opener
         register_heif_opener()
@@ -102,7 +102,7 @@ except ImportError:
 # --- Version Reporting ---
 def get_library_versions():
     """Returns a dictionary of relevant library versions for the project."""
-    libs = ['tqdm', 'Pillow', 'pillow-heif', 'pymediainfo', 'PyPDF2', 'python-docx', 'python-pptx', 'openpyxl', 'EbookLib']
+    libs = ['tqdm', 'Pillow', 'pillow-heif', 'pymediainfo', 'rawpy', 'PyPDF2', 'python-docx', 'python-pptx', 'openpyxl', 'EbookLib']
     versions = {}
     for lib in libs:
         try:
@@ -145,7 +145,6 @@ def extract_svg_metadata(file_path: Path) -> Dict[str, Any]:
         tree = ET.parse(file_path)
         root = tree.getroot()
         meta = {}
-        # Simple extraction, SVG units can be complex (cm, mm, px, %)
         if 'width' in root.attrib: meta['Width'] = root.attrib['width']
         if 'height' in root.attrib: meta['Height'] = root.attrib['height']
         return meta
@@ -276,18 +275,27 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
     # 2. Dispatch Logic
     specialized_meta = {}
     
-    # HEIC Specific Handling (Attempt Pillow/HEIF first, Fallback to MediaInfo)
+    # Standard Images (Pillow is good)
+    img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
+    
+    # RAW Images (Pillow reads thumbnails, MediaInfo reads full headers)
+    # We route these to MediaInfo to get correct Dimensions
+    raw_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf']
+
     if ext in ['.heic', '.heif']:
+        # HEIC: Try Pillow (with plugin), fallback to MediaInfo
         specialized_meta = extract_image_metadata(file_path)
-        # If Pillow failed (e.g. library missing or header issue), use MediaInfo
         if 'Pillow_Error' in specialized_meta:
-            # Drop the pillow error and try MediaInfo
             specialized_meta = extract_video_metadata(file_path)
-            # Add a flag to indicate source
             specialized_meta['_Source'] = 'MediaInfo (HEIC Fallback)'
 
-    elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.cr2', '.nef', '.arw', '.dng', '.orf']:
+    elif ext in img_exts:
         specialized_meta = extract_image_metadata(file_path)
+
+    elif ext in raw_exts:
+        # RAW FIX: Use MediaInfo for accurate dimensions
+        specialized_meta = extract_video_metadata(file_path)
+        specialized_meta['_Source'] = 'MediaInfo (RAW)'
     
     elif ext == '.svg':
         specialized_meta = extract_svg_metadata(file_path)
@@ -311,7 +319,7 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
         specialized_meta = extract_archive_metadata(file_path)
         
     else:
-        # Fallback to MediaInfo for Audio/Video/Unknown
+        # Audio/Video/Unknown
         if verbose:
             specialized_meta = extract_video_metadata_verbose(file_path)
         else:
@@ -323,11 +331,9 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
 
 
 def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
-    """(Internal) Exhaustive MediaInfo extraction."""
     results = {}
     if not MEDIINFO_AVAILABLE:
         return {"MediaInfo_Error": "pymediainfo not installed"}
-        
     try:
         media_info = MediaInfo.parse(str(file_path))
         for track in media_info.tracks:
@@ -340,7 +346,6 @@ def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
             track_dict = track.to_data()
             for key, value in track_dict.items():
                 if value is None or key in ['track_type', 'track_id']: continue
-                
                 clean_key = f"{prefix}_{key.replace('_', ' ').title().replace(' ', '_')}"
                 if clean_key not in results:
                     results[clean_key] = value
@@ -349,10 +354,7 @@ def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
     return results
 
 def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
-    """
-    (Internal) Standard MediaInfo extraction.
-    UPDATED: Returns INTs for calculations, not strings.
-    """
+    """Standard MediaInfo extraction."""
     results = {}
     if not MEDIINFO_AVAILABLE:
         return {"MediaInfo_Error": "pymediainfo not installed"}
@@ -362,10 +364,7 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
         for track in media_info.tracks:
             if track.track_type == "General":
                 results["Format"] = track.format
-                # Duration is ms, return float seconds or ms int? 
-                # MediaInfo 'duration' is usually Int (ms). 
-                if track.duration:
-                    results["Duration"] = int(track.duration) / 1000.0 # Seconds
+                if track.duration: results["Duration"] = int(track.duration) / 1000.0 
                 results["Recorded_Date"] = track.recorded_date
 
             elif track.track_type == "Video":
@@ -373,25 +372,23 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
                 if track.width: results["Width"] = int(track.width)
                 if track.height: results["Height"] = int(track.height)
                 results["Frame_Rate"] = track.frame_rate
+            
+            # RAW images often appear as 'Image' track type in MediaInfo
+            elif track.track_type == "Image":
+                if track.width: results["Width"] = int(track.width)
+                if track.height: results["Height"] = int(track.height)
+                results["Format"] = track.format
 
             elif track.track_type == "Audio":
                 t_id = f"Audio_{track.track_id or '1'}"
                 results[f"{t_id}_Format"] = track.format
-                if track.sampling_rate:
-                    results[f"{t_id}_Sampling_Rate"] = int(track.sampling_rate)
-                
-                # Bitrate extraction
-                br = track.bit_rate or track.other_bit_rate
-                if track.bit_rate:
-                    results["Bit_Rate"] = int(track.bit_rate) # Raw bits/sec
-                elif isinstance(track.other_bit_rate, list) and track.other_bit_rate:
-                     results["Bit_Rate_String"] = track.other_bit_rate[0]
+                if track.sampling_rate: results[f"{t_id}_Sampling_Rate"] = int(track.sampling_rate)
+                if track.bit_rate: results["Bit_Rate"] = int(track.bit_rate)
 
     except Exception as e:
         results["MediaInfo_Error"] = str(e)
     return results
 
-# --- Demo/Test Support ---
 def demo_tqdm_progress(iterable: Any = 100, desc: str = "Testing Progress Bar"):
     if not TQDM_AVAILABLE:
         print("tqdm is not available.")
