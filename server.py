@@ -49,10 +49,11 @@ _CHANGELOG_ENTRIES = [
     "FIX: Added Cache-Busting (?t=timestamp) to image previews to force browser to load High-Res RAW conversions.",
     "DEBUG: Added console logging for RAW conversion attempts.",
     "FEATURE: Added On-the-Fly Video Transcoding (MKV/AVI/WMV -> MP4) using FFmpeg streaming.",
-    "FEATURE: Configurable FFmpeg binary path and arguments via organizer_config.json."
+    "FEATURE: Configurable FFmpeg binary path and arguments via organizer_config.json.",
+    "FIX: Enforced '-pix_fmt yuv420p' and '-ac 2' in FFmpeg to ensure browser compatibility."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.50
+# Version: 0.10.51
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -132,9 +133,14 @@ def transcode_video_stream(path):
     settings = CONFIG.FFMPEG_SETTINGS
     
     # 1. Base Command
-    cmd = [FFMPEG_BINARY, '-i', str(path)]
+    # -analyzeduration and -probesize help start faster on network streams
+    cmd = [FFMPEG_BINARY, '-analyzeduration', '100M', '-probesize', '100M', '-i', str(path)]
     
     # 2. Transcoding Settings (User Configurable)
+    # WEB COMPATIBILITY FIX: Force yuv420p pixel format. 
+    # Browsers cannot handle yuv444p or other high profiles.
+    cmd.extend(['-pix_fmt', 'yuv420p'])
+    
     cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
     
     # Preset (Speed vs Quality for SW encoding)
@@ -146,7 +152,8 @@ def transcode_video_stream(path):
         cmd.extend(['-crf', settings.get('crf')])
 
     # Audio Settings
-    cmd.extend(['-c:a', settings.get('audio_codec', 'aac')])
+    # WEB COMPATIBILITY FIX: Force 2 channels. 5.1/7.1 audio often causes silence in browsers.
+    cmd.extend(['-c:a', settings.get('audio_codec', 'aac'), '-ac', '2'])
     
     # 3. User Custom Flags (e.g. HW acceleration specific options)
     # Allows users to inject list like ["-rc", "vbr_hq", "-profile:v", "high"]
