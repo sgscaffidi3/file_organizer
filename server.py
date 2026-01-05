@@ -508,7 +508,6 @@ HTML_TEMPLATE = """
     // --- MODAL ---
     function openMeta(id) {
         $.get(`/api/details/${id}`, function(d) {
-            // FIX: Safely parse JSON or default to empty object
             let meta = {};
             try { 
                 if (d.metadata) {
@@ -810,14 +809,7 @@ def api_details(id):
     conn = get_db()
     row = conn.execute("SELECT fpi.file_id, fpi.original_relative_path, mc.file_type_group, mc.extended_metadata FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash = mc.content_hash WHERE fpi.file_id = ?", (id,)).fetchone()
     conn.close()
-    
-    # FIX: Handle NULL extended_metadata
-    meta_val = row[3] if row and row[3] else "{}"
-    
-    if row:
-        return jsonify({"id": row[0], "name": Path(row[1]).name, "type": row[2], "metadata": meta_val})
-    else:
-        return jsonify({})
+    return jsonify({"id": row[0], "name": Path(row[1]).name, "type": row[2], "metadata": row[3]}) if row else {}
 
 @app.route('/api/media/<int:id>')
 def serve(id):
