@@ -4,7 +4,7 @@ from pathlib import Path
 # Files to include
 EXTENSIONS = {'.py', '.html', '.css', '.js', '.json', '.md', '.txt'}
 # Folders to ignore
-IGNORE_DIRS = {'venv', '__pycache__', '.git', '.idea', 'test_output', 'organized_media_output'}
+IGNORE_DIRS = {'venv', '__pycache__', '.git', '.idea', 'test_output', 'organized_media_output', 'test_assets'}
 # Files to ignore
 IGNORE_FILES = {'package-lock.json', 'project_bundle.txt'}
 
