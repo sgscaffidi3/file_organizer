@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -32,10 +32,12 @@ _CHANGELOG_ENTRIES = [
     "FIX: Implemented special SQL logic for browsing files with no extension ('no_ext').",
     "UX: Clarified Duplicate Table vs Stats distinction.",
     "FEATURE: Added 'History' tab to File Inspector for viewing Original Name and Source Copies.",
-    "UX: Added Database Name indicator in Navbar to distinguish Source Scan vs Clean Export."
+    "UX: Added Database Name indicator in Navbar to distinguish Source Scan vs Clean Export.",
+    "FEATURE: Added 'Quality' Tab to Sidebar for browsing by Resolution/Bitrate/Megapixels.",
+    "FEATURE: Added Text File Preview (.txt, .md, .csv, etc) in File Inspector."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.6.30
+# Version: 0.5.31
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -55,7 +57,6 @@ app = Flask(__name__)
 # Global instances
 DB_PATH = None
 CONFIG = None
-DB_NAME_LABEL = "Source Index"
 
 # --- DATABASE HELPERS ---
 def norm_path_sql(path):
@@ -94,13 +95,12 @@ HTML_TEMPLATE = """
         
         .wrapper { display: flex; height: 100%; width: 100%; }
         
-        /* Sidebar */
         #sidebar { width: var(--sidebar-width); background: var(--panel); border-right: 1px solid #333; display: flex; flex-direction: column; flex-shrink: 0; }
         .sidebar-header { height: var(--header-height); padding: 0 15px; display: flex; align-items: center; border-bottom: 1px solid #333; background: #252525; }
         .sidebar-brand { font-weight: 600; color: #fff; font-size: 1.1rem; }
         
         .nav-tabs-custom { border-bottom: 1px solid #333; display: flex; }
-        .nav-item-custom { flex: 1; text-align: center; cursor: pointer; padding: 12px 5px; color: #888; border-bottom: 3px solid transparent; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        .nav-item-custom { flex: 1; text-align: center; cursor: pointer; padding: 12px 2px; color: #888; border-bottom: 3px solid transparent; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
         .nav-item-custom:hover { background: #2a2a2a; color: #ccc; }
         .nav-item-custom.active { color: var(--accent); border-bottom-color: var(--accent); background: #252525; font-weight: bold; }
         
@@ -116,21 +116,23 @@ HTML_TEMPLATE = """
         .tree-label.selected { background: var(--accent); color: #fff; }
         .tree-label i { margin-right: 6px; color: #ffc107; }
 
-        /* Main */
+        /* Quality List */
+        .qual-header { font-weight: bold; color: #888; margin-top: 15px; margin-bottom: 5px; font-size: 0.8rem; padding-left: 5px; text-transform: uppercase; border-bottom: 1px solid #333; }
+        .qual-item { padding: 5px 10px; cursor: pointer; border-radius: 4px; display: flex; justify-content: space-between; font-size: 0.9rem; color: #ccc; }
+        .qual-item:hover { background: #333; color: #fff; }
+        .qual-item.selected { background: var(--accent); color: #fff; }
+
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-dark); min-width: 0; }
         .top-bar { height: var(--header-height); border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: var(--panel); }
         
-        /* Dashboard Stats */
         .stats-row { display: flex; gap: 15px; padding: 15px 20px; background: #181818; border-bottom: 1px solid #333; }
         .stat-card { background: #252525; flex: 1; padding: 10px 15px; border-radius: 6px; border: 1px solid #333; display: flex; flex-direction: column; justify-content: center; }
         .stat-val { font-size: 1.2rem; font-weight: bold; color: #fff; }
         .stat-label { font-size: 0.75rem; color: #888; text-transform: uppercase; }
 
-        /* Advanced Filters */
         .filters-bar { padding: 10px 20px; background: #1a1a1a; border-bottom: 1px solid #333; display: flex; gap: 10px; align-items: center; }
         .form-select-sm, .form-control-sm { background-color: #2b2b2b; border-color: #444; color: #eee; }
         
-        /* Table */
         .table-container { flex: 1; padding: 0 20px 20px 20px; overflow: hidden; display: flex; flex-direction: column; }
         .dataTables_wrapper { height: 100%; display: flex; flex-direction: column; font-size: 0.9rem; }
         .dataTables_scroll { flex: 1; overflow: hidden; }
@@ -141,17 +143,20 @@ HTML_TEMPLATE = """
         .badge-type { width: 55px; font-size: 0.7rem; }
         .thumb-img { width: 50px; height: 35px; object-fit: cover; border-radius: 3px; background: #000; border: 1px solid #444; cursor: zoom-in; }
 
-        /* Views */
         .view-section { display: none; height: 100%; flex-direction: column; }
         .view-section.active { display: flex; }
         
-        /* Report View */
         .report-container { padding: 20px; overflow-y: auto; }
         .report-card { background: var(--panel); border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
         .report-table th { color: #888; border-bottom: 1px solid #444; font-size: 0.9rem; }
         .report-table td { color: #ddd; vertical-align: middle; }
         h4.report-title { color: var(--accent); margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
 
+        .modal-content { background: #252525; border: 1px solid #444; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .modal-header { border-bottom: 1px solid #444; }
+        .modal-footer { border-top: 1px solid #444; }
+        pre.json-view { background: #111; color: #76ff03; padding: 15px; border-radius: 4px; max-height: 400px; overflow: auto; font-size: 0.85rem; }
+        
     </style>
 </head>
 <body>
@@ -163,8 +168,9 @@ HTML_TEMPLATE = """
             <div class="sidebar-brand"><i class="bi bi-hdd-network-fill text-primary"></i> Media Organizer</div>
         </div>
         <div class="nav-tabs-custom">
-            <div class="nav-item-custom active" onclick="switchSidebar('browser')">Browser</div>
+            <div class="nav-item-custom active" onclick="switchSidebar('browser')">Files</div>
             <div class="nav-item-custom" onclick="switchSidebar('types')">Types</div>
+            <div class="nav-item-custom" onclick="switchSidebar('qual')">Quality</div>
             <div class="nav-item-custom" onclick="switchSidebar('dupes')">Dupes</div>
         </div>
         
@@ -186,6 +192,11 @@ HTML_TEMPLATE = """
         <!-- Types Tab -->
         <div id="sb-types" class="sidebar-content">
             <div id="types-list"></div>
+        </div>
+
+        <!-- Quality Tab -->
+        <div id="sb-qual" class="sidebar-content">
+            <div id="qual-list"></div>
         </div>
         
         <!-- Dupes Tab -->
@@ -311,6 +322,7 @@ HTML_TEMPLATE = """
         initStats();
         initTree();
         initTypes();
+        initQuality();
         initTable();
         initYears();
     });
@@ -428,15 +440,41 @@ HTML_TEMPLATE = """
         });
     }
 
+    function initQuality() {
+        $.get('/api/quality', function(data) {
+            let html = '';
+            
+            // Video
+            html += `<div class="qual-header">Video Resolution</div>`;
+            for (let [k,v] of Object.entries(data.video)) {
+                if(v>0) html += `<div class="qual-item" onclick="setFilter('qual', 'vid:${k}', this)"><span>${k}</span><span class="count-badge">${v}</span></div>`;
+            }
+            
+            // Image
+            html += `<div class="qual-header">Image Quality</div>`;
+            for (let [k,v] of Object.entries(data.image)) {
+                if(v>0) html += `<div class="qual-item" onclick="setFilter('qual', 'img:${k}', this)"><span>${k}</span><span class="count-badge">${v}</span></div>`;
+            }
+            
+            // Audio
+            html += `<div class="qual-header">Audio Quality</div>`;
+            for (let [k,v] of Object.entries(data.audio)) {
+                if(v>0) html += `<div class="qual-item" onclick="setFilter('qual', 'aud:${k}', this)"><span>${k}</span><span class="count-badge">${v}</span></div>`;
+            }
+            $('#qual-list').html(html);
+        });
+    }
+
     function setFilter(type, val, el) {
         if (type === 'folder') val = decodeURIComponent(val);
         filterState = { type: type, val: val };
         
-        $('.tree-label, .nav-item-custom, .btn').removeClass('selected active');
+        $('.tree-label, .nav-item-custom, .btn, .qual-item').removeClass('selected active');
         if (el) $(el).addClass('selected');
         
         let label = val || (type === 'dupes' ? 'Duplicates' : type === 'unique' ? 'Unique Files' : 'All Files');
         if (type === 'ext' && val === 'no_ext') label = 'Files with No Extension';
+        if (type === 'qual') label = val.replace(':', ' - ');
         $('#view-label').text(label);
         
         switchMainView('table');
@@ -488,13 +526,39 @@ HTML_TEMPLATE = """
             // PREVIEW
             let preview = '<div class="text-muted">No Preview</div>';
             let src = `/api/media/${id}`;
-            if (d.type === 'IMAGE') preview = `<img src="${src}" style="max-width:100%; max-height:100%; object-fit:contain">`;
-            if (d.type === 'VIDEO') preview = `<video controls autoplay style="max-width:100%"><source src="${src}"></video>`;
-            if (d.type === 'AUDIO') preview = `<audio controls src="${src}"></audio>`;
+            let ext = d.name.split('.').pop().toLowerCase();
+            let txtExts = ['txt', 'md', 'csv', 'json', 'xml', 'log', 'py', 'js', 'html', 'css', 'sh', 'bat', 'ini'];
+            
+            if (d.type === 'IMAGE') {
+                preview = `<img src="${src}" style="max-width:100%; max-height:100%; object-fit:contain">`;
+            } else if (d.type === 'VIDEO') {
+                preview = `<video controls autoplay style="max-width:100%"><source src="${src}"></video>`;
+            } else if (d.type === 'AUDIO') {
+                preview = `<audio controls src="${src}"></audio>`;
+            } else if (txtExts.includes(ext)) {
+                // Text Preview
+                $.get(src, function(txt) {
+                    $('#modal-preview').html(`<pre class="p-3 text-light" style="overflow:auto; max-height:100%; width:100%; white-space:pre-wrap;">${escapeHtml(txt)}</pre>`);
+                }).fail(function() {
+                    $('#modal-preview').html('<div class="text-danger">Could not load text content</div>');
+                });
+                // Return early since we are async loading text
+                new bootstrap.Modal('#metaModal').show();
+                return;
+            }
             
             $('#modal-preview').html(preview);
             new bootstrap.Modal('#metaModal').show();
         });
+    }
+    
+    function escapeHtml(text) {
+        if (!text) return text;
+        return text.replace(/&/g, "&amp;")
+                   .replace(/</g, "&lt;")
+                   .replace(/>/g, "&gt;")
+                   .replace(/"/g, "&quot;")
+                   .replace(/'/g, "&#039;");
     }
 
     // --- REPORT ---
@@ -575,6 +639,49 @@ def api_types():
         data[g][ext] = data[g].get(ext, 0) + 1
     return jsonify(data)
 
+@app.route('/api/quality')
+def api_quality():
+    conn = get_db()
+    
+    # Video
+    res_data = conn.execute("SELECT height FROM MediaContent WHERE file_type_group='VIDEO'").fetchall()
+    res_stats = {'4K+':0, '1080p':0, '720p':0, 'SD':0}
+    for r in res_data:
+        h = r[0]
+        if not h: continue
+        if h >= 2160: res_stats['4K+'] += 1
+        elif h >= 1080: res_stats['1080p'] += 1
+        elif h >= 720: res_stats['720p'] += 1
+        else: res_stats['SD'] += 1
+        
+    # Image
+    img_data = conn.execute("SELECT width, height FROM MediaContent WHERE file_type_group='IMAGE'").fetchall()
+    img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
+    for w, h in img_data:
+        if not w or not h: continue
+        mp = (w * h) / 1_000_000
+        if mp >= 20: img_stats['Pro (>20 MP)'] += 1
+        elif mp >= 12: img_stats['High (12-20 MP)'] += 1
+        elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
+        else: img_stats['Low (<2 MP)'] += 1
+        
+    # Audio
+    aud_data = conn.execute("SELECT bitrate FROM MediaContent WHERE file_type_group='AUDIO'").fetchall()
+    aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0}
+    for r in aud_data:
+        try:
+            val = str(r[0]).lower()
+            if not val or val == 'none': continue
+            val = val.replace('bps','').replace('kb/s','000').replace('k','000').strip()
+            b = int(float(val))
+            if b >= 256000: aud_stats['High (>256k)'] += 1
+            elif b >= 128000: aud_stats['Standard (128k+)'] += 1
+            else: aud_stats['Low (<128k)'] += 1
+        except: pass
+        
+    conn.close()
+    return jsonify({'video': res_stats, 'image': img_stats, 'audio': aud_stats})
+
 @app.route('/api/files')
 def api_files():
     conn = get_db()
@@ -623,6 +730,28 @@ def api_files():
         else:
             where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
             params.append(f"%{f_val}")
+    elif f_type == 'qual':
+        # Qual format: 'vid:4K+', 'img:Pro (>20 MP)', 'aud:High (>256k)'
+        cat, criteria = f_val.split(':', 1)
+        if cat == 'vid':
+            if '4K' in criteria: where.append("mc.height >= 2160")
+            elif '1080' in criteria: where.append("mc.height >= 1080 AND mc.height < 2160")
+            elif '720' in criteria: where.append("mc.height >= 720 AND mc.height < 1080")
+            elif 'SD' in criteria: where.append("mc.height < 720")
+        elif cat == 'img':
+            # Need calc for MP: width*height >= X
+            if 'Pro' in criteria: where.append("(mc.width * mc.height) >= 20000000")
+            elif 'High' in criteria: where.append("(mc.width * mc.height) >= 12000000 AND (mc.width * mc.height) < 20000000")
+            elif 'Standard' in criteria: where.append("(mc.width * mc.height) >= 2000000 AND (mc.width * mc.height) < 12000000")
+            elif 'Low' in criteria: where.append("(mc.width * mc.height) < 2000000")
+        elif cat == 'aud':
+            # Bitrate logic
+            # Note: Stored in DB as raw int or string? Current libs return INT.
+            # Assuming DB has raw ints. If string, SQL cast needed: CAST(mc.bitrate AS INTEGER)
+            # Just in case, we do simple check (sqlite is loose types)
+            if 'High' in criteria: where.append("mc.bitrate >= 256000")
+            elif 'Standard' in criteria: where.append("mc.bitrate >= 128000 AND mc.bitrate < 256000")
+            elif 'Low' in criteria: where.append("mc.bitrate < 128000")
 
     if min_size:
         where.append("mc.size >= ?")
@@ -746,9 +875,7 @@ def api_report():
             if not val or val == 'none':
                 aud_stats['Unknown'] += 1
                 continue
-            # Remove units
             val = val.replace('bps','').replace('kb/s','000').replace('k','000').strip()
-            # Handle float strings "320000.0"
             b = int(float(val))
             
             if b >= 256000: aud_stats['High (>256k)'] += 1
