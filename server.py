@@ -38,10 +38,12 @@ _CHANGELOG_ENTRIES = [
     "SEARCH: Enhanced search to index 'extended_metadata', enabling search by Original Filename, Camera Model, etc.",
     "FIX: Enforced file_type_group constraints in Quality Filters (prevents Images appearing in Video lists).",
     "FEATURE: Added PDF Preview support via Embed.",
-    "UX: Added browser compatibility warning for non-web video formats (MKV, AVI)."
+    "UX: Added browser compatibility warning for non-web video formats (MKV, AVI).",
+    "PERFORMANCE: Replaced slow Python NORM_PATH function with native SQLite REPLACE() for massive speedup.",
+    "FIX: Ensured metadata API returns valid JSON string '{}' even if DB is NULL to prevent JS display errors."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.35
+# Version: 0.5.38
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -63,14 +65,9 @@ DB_PATH = None
 CONFIG = None
 
 # --- DATABASE HELPERS ---
-def norm_path_sql(path):
-    if path is None: return ""
-    return str(path).replace('\\', '/')
-
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.create_function("NORM_PATH", 1, norm_path_sql)
     return conn
 
 def format_size(size_bytes):
@@ -99,6 +96,7 @@ HTML_TEMPLATE = """
         
         .wrapper { display: flex; height: 100%; width: 100%; }
         
+        /* Sidebar */
         #sidebar { width: var(--sidebar-width); background: var(--panel); border-right: 1px solid #333; display: flex; flex-direction: column; flex-shrink: 0; }
         .sidebar-header { height: var(--header-height); padding: 0 15px; display: flex; align-items: center; border-bottom: 1px solid #333; background: #252525; }
         .sidebar-brand { font-weight: 600; color: #fff; font-size: 1.1rem; }
@@ -126,6 +124,7 @@ HTML_TEMPLATE = """
         .qual-item:hover { background: #333; color: #fff; }
         .qual-item.selected { background: var(--accent); color: #fff; }
 
+        /* Main */
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-dark); min-width: 0; }
         .top-bar { height: var(--header-height); border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: var(--panel); }
         
@@ -137,6 +136,7 @@ HTML_TEMPLATE = """
         .filters-bar { padding: 10px 20px; background: #1a1a1a; border-bottom: 1px solid #333; display: flex; gap: 10px; align-items: center; }
         .form-select-sm, .form-control-sm { background-color: #2b2b2b; border-color: #444; color: #eee; }
         
+        /* Table */
         .table-container { flex: 1; padding: 0 20px 20px 20px; overflow: hidden; display: flex; flex-direction: column; }
         .dataTables_wrapper { height: 100%; display: flex; flex-direction: column; font-size: 0.9rem; }
         .dataTables_scroll { flex: 1; overflow: hidden; }
@@ -147,9 +147,11 @@ HTML_TEMPLATE = """
         .badge-type { width: 55px; font-size: 0.7rem; }
         .thumb-img { width: 50px; height: 35px; object-fit: cover; border-radius: 3px; background: #000; border: 1px solid #444; cursor: zoom-in; }
 
+        /* Views */
         .view-section { display: none; height: 100%; flex-direction: column; }
         .view-section.active { display: flex; }
         
+        /* Report View */
         .report-container { padding: 20px; overflow-y: auto; }
         .report-card { background: var(--panel); border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
         .report-table th { color: #888; border-bottom: 1px solid #444; font-size: 0.9rem; }
@@ -506,9 +508,21 @@ HTML_TEMPLATE = """
     // --- MODAL ---
     function openMeta(id) {
         $.get(`/api/details/${id}`, function(d) {
+            // FIX: Safely parse JSON or default to empty object
             let meta = {};
-            try { meta = JSON.parse(d.metadata); } catch(e) {}
-            $('#modal-json').text(JSON.stringify(meta, null, 4));
+            try { 
+                if (d.metadata) {
+                    meta = JSON.parse(d.metadata);
+                }
+            } catch(e) { console.error("JSON Parse Error", e); }
+            
+            // Check if object is empty
+            if (Object.keys(meta).length === 0) {
+                $('#modal-json').html('<span class="text-muted">No metadata available.</span>');
+            } else {
+                $('#modal-json').text(JSON.stringify(meta, null, 4));
+            }
+            
             $('#modal-download').attr('href', `/api/media/${id}`);
             
             // HISTORY TAB
@@ -715,12 +729,12 @@ def api_files():
     params = []
     
     if search:
-        # Search includes metadata
         where.append("(NORM_PATH(fpi.original_relative_path) LIKE ? OR mc.file_type_group LIKE ? OR mc.extended_metadata LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
+        # FIXED: Logic moved out of f-string
         param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(param_val)
@@ -737,6 +751,7 @@ def api_files():
             where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
             params.append(f"%{f_val}")
     elif f_type == 'qual':
+        # Qual format: 'vid:4K+', 'img:Pro (>20 MP)', 'aud:High (>256k)'
         cat, criteria = f_val.split(':', 1)
         if cat == 'vid':
             where.append("mc.file_type_group = 'VIDEO'")
@@ -795,7 +810,14 @@ def api_details(id):
     conn = get_db()
     row = conn.execute("SELECT fpi.file_id, fpi.original_relative_path, mc.file_type_group, mc.extended_metadata FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash = mc.content_hash WHERE fpi.file_id = ?", (id,)).fetchone()
     conn.close()
-    return jsonify({"id": row[0], "name": Path(row[1]).name, "type": row[2], "metadata": row[3]}) if row else {}
+    
+    # FIX: Handle NULL extended_metadata
+    meta_val = row[3] if row and row[3] else "{}"
+    
+    if row:
+        return jsonify({"id": row[0], "name": Path(row[1]).name, "type": row[2], "metadata": meta_val})
+    else:
+        return jsonify({})
 
 @app.route('/api/media/<int:id>')
 def serve(id):
