@@ -12,7 +12,7 @@ pillow-heif
 pymediainfo>=6.1.0
 hachoir
 
-# RAW Image Processing (New)
+# RAW Image Processing
 rawpy
 
 # Documents & Archives

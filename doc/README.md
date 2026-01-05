@@ -1,80 +1,83 @@
 # ==============================================================================
-# File: README.md
-# Version: 0.3.5
+# File: doc/README.md
+# Version: 0.3.6
 # ------------------------------------------------------------------------------
 # CHANGELOG:
-# 1. Initial creation of the README file with project description and setup instructions.
-# 2. Updated documentation to reflect the new JSON-based configuration managed by `config_manager.py`.
-# 3. Project name changed from \"Personal Media Organizer and Deduplicator\" to \"File Organizer\".
-# 4. Updated version to 0.3.4, synchronized changelog, and clarified dependency and output path details.
-# 5. Updated version to 0.3.5; changes are up-to-date with project version 0.3.26. Added tqdm to dependencies and included information about the test runner.
+# 1. Updated documentation to reflect the new JSON-based configuration.
+# 2. Added section for Web Dashboard and Transcoding features.
+# 3. Documented NVIDIA Hardware Acceleration setup.
 # ------------------------------------------------------------------------------
 
 # 🗄️ File Organizer
 
-This is a high-performance Python utility designed to catalog, deduplicate, and organize vast file collections (images, videos, documents) stored across multiple locations. It is built for **safety** and **scalability**, ensuring original files are never modified and utilizing database persistence to handle multi-terabyte data sets efficiently.
+This is a high-performance Python utility designed to catalog, deduplicate, and organize vast media collections (images, videos, documents). It features a modern **Web Dashboard** for browsing, inspecting, and managing your files.
 
-The project follows a modular, pipeline-based approach: Scan -> Process Metadata -> Deduplicate/Decide -> Migrate/Report.
+## 🚀 Key Features
 
-## 🚀 Getting Started (Setup)
+*   **Deduplication**: Identifies duplicates using SHA-256 hashing.
+*   **Organization**: Sorts files into a `YEAR/MONTH` folder structure.
+*   **Web Dashboard**: A responsive Flask-based UI to browse your library.
+    *   **Map View**: Visualize GPS-tagged photos on an interactive world map.
+    *   **Inspector**: View metadata, add **User Notes**, and check file history.
+    *   **Transcoding**: Streams MKV, AVI, and HEVC videos to the browser on-the-fly.
+*   **Hardware Acceleration**: Supports **NVIDIA NVENC** for fast video transcoding.
+*   **RAW & HEIC Support**: Automatically converts professional formats for browser preview.
+
+## 🛠️ Setup & Installation
 
 ### 1. Prerequisites
-
-* Python 3.8+
-* Git (for cloning the repository)
+*   Python 3.8+
+*   **FFmpeg** (Required for video transcoding)
 
 ### 2. Installation
-
-1.  **Clone the Repository:**
-    ```bash
-    git clone [Your Repository URL Here]
-    cd file_organizer
-    ```
-
-2.  **Set up the Virtual Environment (Recommended):**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Linux/macOS
-    .\venv\Scripts\activate   # On Windows
-    ```
-
-3.  **Install Dependencies:**
-    Dependencies include libraries for metadata processing and UI feedback, such as **Pillow** (for images), **tqdm** (for progress bars), and potentially **MoviePy** (for video).
-    ```bash
-    pip install -r requirements.txt 
-    ```
-
-### 3. Configuration (Critical Step!)
-
-The dynamic settings for the project are managed via a **JSON file**.
-
-1.  **Locate the Configuration File:**
-    * Find the file named `organizer_config.json` in the root directory.
-
-2.  **Update Paths:**
-    * Under the `"paths"` section, set **`"source_directory"`** to the root of your media collection.
-    * Adjust **`"output_directory"`** for the final organized structure.
-
-3.  **Review Preferences:**
-    * Review the `"file_groups"` and `"organization"` settings to match your desired preferences.
-
-### 4. Final Organized Path Format
-
-The final path is deterministically calculated as:
-`OUTPUT_DIR/YEAR/MONTH/HASH_FILEID.EXT`
-*(Example: organized_media_output/2025/11/a4b2c3d4e5f6_12345.jpg)*
-
-### 5. Initialization
-
-Before running the full scan, you must initialize the database schema:
-
 ```bash
-python database_manager.py --init
+git clone [Repo URL]
+cd file_organizer
+pip install -r requirements.txt
 ```
-### 6. Running Tests
-To verify the integrity of the project and your environment, run the integrated test suite:
-
-Bash
-
+### 3. Configuration
+Edit organizer_config.json to set your paths:
+```bash
+{
+    "paths": {
+        "source_directory": "C:/Your/Media/Source",
+        "output_directory": "./organized_media_output"
+    },
+    "ffmpeg": {
+        "binary_path": "C:/Path/To/ffmpeg/bin/ffmpeg.exe" 
+    }
+}
+```
+If binary_path is null, the system attempts to auto-detect FFmpeg from your system PATH.
+🖥️ Usage
+1. Build the Database (The Pipeline)
+Run the full pipeline to scan, index, and organize your files:
+```bash
+python main.py --all
+--scan: Indexes files.
+--meta: Extracts metadata (Exif, Codecs, GPS).
+--dedupe: Finds duplicates.
+--migrate: Copies files to the Output Directory.
+```
+2. Launch the Dashboard
+Start the web server to browse your organized library:
+```bash
+python main.py --serve
+Access at: http://127.0.0.1:5000
+Map: Click the "Map" button in the top bar to see your geotagged photos.
+Transcoding: Videos not natively supported by Chrome (AVI, MKV) are transcoded automatically.
+Tip: If you have an NVIDIA GPU, ensure your drivers are installed. The server will auto-detect h264_nvenc.
+```
+🧩 Advanced Features
+Clean Export
+If you want to view a "clean" version of the database (showing only the organized files, not the source files), run:
+```bash
+python main.py --serve --db "organized_media_output/clean_index.sqlite"
+```
+User Notes
+You can add persistent notes to any file via the Inspector (Click the (i) button). Notes are saved to the SQLite database and exported with your library.
+🧪 Testing
+Run the comprehensive test suite to verify your environment:
+```bash
 python test/test_all.py
-This will run all unit tests and generate a Detailed Test Report with a formatted summary table of PASS/FAIL/ERROR statuses for every component.
+```

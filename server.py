@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 12
+_MINOR_VERSION = 11
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -65,10 +65,12 @@ _CHANGELOG_ENTRIES = [
     "COMPATIBILITY: Added .mpg, .mpeg, and .mpe to mandatory transcoding list.",
     "FEATURE: Added /api/map endpoint to serve GPS coordinates from metadata.",
     "FEATURE: Added /api/update_notes endpoint to write User Notes into JSON metadata.",
-    "FEATURE: Added /api/export_db endpoint to download the SQLite database."
+    "FEATURE: Added /api/export_db endpoint to download the SQLite database.",
+    "PERFORMANCE: Implemented Auto-Detection for NVIDIA GPU (h264_nvenc).",
+    "PERFORMANCE: Added adaptive transcoding logic to swap 'libx264' with 'h264_nvenc' and adjust flags (crf->cq, preset->p1) automatically."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.12.66
+# Version: 0.11.67
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -119,6 +121,7 @@ DB_PATH = None
 CONFIG = None
 FFMPEG_BINARY = None
 FFPROBE_BINARY = None
+HW_ACCEL_TYPE = "none" # 'none' or 'nvidia'
 
 def norm_path_sql(path):
     if path is None: return ""
@@ -137,10 +140,23 @@ def format_size(size_bytes):
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
 
+def check_hardware_acceleration(binary, cwd):
+    """Checks if NVENC is available in the FFmpeg build."""
+    try:
+        # Run ffmpeg -encoders and grep for nvenc
+        cmd = [binary, '-hide_banner', '-encoders']
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+        if 'h264_nvenc' in result.stdout:
+            return 'nvidia'
+    except Exception as e:
+        print(f"HW Check Failed: {e}")
+    return 'none'
+
 def transcode_video_stream(path_str):
     """
     Generates a stream of bytes from FFmpeg, transcoding the input 
     to fragmented MP4 (H.264/AAC) for browser playback.
+    Automatically adapts to NVIDIA GPU if available.
     """
     if not FFMPEG_BINARY:
         return 
@@ -155,24 +171,43 @@ def transcode_video_stream(path_str):
     
     # 2. Build Command
     cmd = [FFMPEG_BINARY, '-y']
-    
     cmd.extend(['-i', str(abs_path)])
     
-    # Video
-    cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
-    
-    if settings.get('preset'):
-        cmd.extend(['-preset', settings.get('preset')])
-    
-    if settings.get('crf'):
-        cmd.extend(['-crf', settings.get('crf')])
+    # --- VIDEO CODEC LOGIC ---
+    if HW_ACCEL_TYPE == 'nvidia':
+        # NVIDIA NVENC SETTINGS
+        # Use h264_nvenc
+        cmd.extend(['-c:v', 'h264_nvenc'])
+        
+        # Preset: p1 (fastest) to p7 (slowest). Default to p1 for streaming speed.
+        cmd.extend(['-preset', 'p1'])
+        
+        # Quality: NVENC uses -cq (0-51) instead of -crf.
+        # Map user's CRF pref (default 23) to CQ.
+        crf = settings.get('crf', '23')
+        cmd.extend(['-rc', 'vbr', '-cq', crf])
+        
+        # Zero Latency is often implicit with p1/low-latency tuning, 
+        # but we add specific flags if needed. NVENC usually streams well by default.
+        # -tune zerolatency is NOT a standard nvenc flag, we skip it.
+    else:
+        # CPU SOFTWARE SETTINGS (libx264)
+        cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
+        
+        if settings.get('preset'):
+            cmd.extend(['-preset', settings.get('preset')])
+        
+        if settings.get('crf'):
+            cmd.extend(['-crf', settings.get('crf')])
+            
+        cmd.extend(['-tune', 'zerolatency'])
 
-    # WEB COMPATIBILITY
-    cmd.extend(['-pix_fmt', 'yuv420p'])
-    cmd.extend(['-profile:v', 'baseline'])
+    # --- COMMON SETTINGS ---
     
-    # LATENCY
-    cmd.extend(['-tune', 'zerolatency'])
+    # WEB COMPATIBILITY: Force standard pixel format and baseline profile
+    cmd.extend(['-pix_fmt', 'yuv420p'])
+    # NVENC supports -profile:v, but typically 'main' or 'high'. 'baseline' is often safe.
+    cmd.extend(['-profile:v', 'baseline'])
 
     # Audio
     cmd.extend(['-c:a', settings.get('audio_codec', 'aac'), '-ac', '2', '-ar', '44100'])
@@ -192,10 +227,8 @@ def transcode_video_stream(path_str):
     
     print(f"[FFmpeg] Command: {' '.join(cmd)}")
     
-    # CRITICAL: Set CWD to FFmpeg folder so it finds its DLLs
-    cwd = os.path.dirname(FFMPEG_BINARY)
-    
     # 3. Execution
+    cwd = os.path.dirname(FFMPEG_BINARY)
     proc = subprocess.Popen(
         cmd, 
         stdout=subprocess.PIPE, 
@@ -638,7 +671,7 @@ def api_report():
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1_000_000
+        mp = (w * h) / 1000000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
@@ -678,7 +711,7 @@ def api_report():
     return full_html
 
 def run_server(config_manager):
-    global DB_PATH, CONFIG, FFMPEG_BINARY, FFPROBE_BINARY
+    global DB_PATH, CONFIG, FFMPEG_BINARY, FFPROBE_BINARY, HW_ACCEL_TYPE
     CONFIG = config_manager
     if DB_PATH is None:
         DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
@@ -719,6 +752,10 @@ def run_server(config_manager):
         
     # DETERMINE FFPROBE PATH
     if FFMPEG_BINARY:
+        # Check Hardware Acceleration Support
+        cwd = os.path.dirname(FFMPEG_BINARY)
+        HW_ACCEL_TYPE = check_hardware_acceleration(FFMPEG_BINARY, cwd)
+        
         # Assume ffprobe is next to ffmpeg
         ffmpeg_path = Path(FFMPEG_BINARY)
         probe_candidate = ffmpeg_path.parent / ('ffprobe.exe' if os.name == 'nt' else 'ffprobe')
@@ -732,7 +769,10 @@ def run_server(config_manager):
     
     if FFMPEG_BINARY:
         print(f"✅ FFmpeg detected at: {FFMPEG_BINARY}")
-        print(f"   Settings: {cfg.get('video_codec', 'libx264')} / {cfg.get('preset', 'default')}")
+        if HW_ACCEL_TYPE == 'nvidia':
+            print(f"🚀 NVIDIA Hardware Acceleration Detected (h264_nvenc) - ACTIVE")
+        else:
+            print(f"ℹ️  Software Encoding Active (libx264)")
     else:
         print("⚠️ FFmpeg not found. MKV/AVI/WMV playback disabled.")
         
