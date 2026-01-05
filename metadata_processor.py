@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 8
+_MINOR_VERSION = 9
 _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class (F04).",
     "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
@@ -12,10 +12,11 @@ _CHANGELOG_ENTRIES = [
     "UX: Added TQDM progress bar for real-time extraction feedback.",
     "BUG FIX: Updated _get_files_to_process query to prevent infinite re-processing of Audio/Docs.",
     "PERFORMANCE: Implemented Multithreaded Metadata Extraction using ThreadPoolExecutor.",
-    "PERFORMANCE: Implemented Batch Database Writes (1000/batch) to fix SQLite locking issues."
+    "PERFORMANCE: Implemented Batch Database Writes (1000/batch) to fix SQLite locking issues.",
+    "DATA SAFETY: Modified SQL UPDATE to use COALESCE, preventing NULL dates from overwriting valid file system dates."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.8.10
+# Version: 0.9.11
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
@@ -63,7 +64,6 @@ class MetadataProcessor:
             return None
             
         try:
-            # Local import to avoid circular dependency/pickling issues in threads
             from libraries_helper import get_video_metadata
             from video_asset import VideoAsset
             from base_assets import GenericFileAsset, AudioAsset, ImageAsset, DocumentAsset
@@ -76,16 +76,15 @@ class MetadataProcessor:
             elif group == 'DOCUMENT': asset = DocumentAsset(path, raw_meta)
             else: asset = GenericFileAsset(path, raw_meta)
             
-            # Extract data needed for DB update
             return (
-                asset.recorded_date,
+                asset.recorded_date, # May be None
                 getattr(asset, 'width', None),
                 getattr(asset, 'height', None),
                 getattr(asset, 'duration', None),
                 getattr(asset, 'bitrate', None if group != 'AUDIO' else asset.bitrate),
                 getattr(asset, 'video_codec', None),
                 asset.get_full_json(),
-                content_hash # WHERE clause
+                content_hash
             )
         except Exception:
             return None
@@ -99,7 +98,6 @@ class MetadataProcessor:
         print(f"Processing metadata for {len(records)} files...")
         print(f"Threads: {config.METADATA_THREADS}")
         
-        # Buffer for batch updates
         batch_updates = []
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=config.METADATA_THREADS) as executor:
@@ -116,7 +114,6 @@ class MetadataProcessor:
                         else:
                             self.skip_count += 1
                             
-                        # Batch Commit
                         if len(batch_updates) >= DB_BATCH_SIZE:
                             self._flush_batch(batch_updates)
                             batch_updates.clear()
@@ -125,18 +122,24 @@ class MetadataProcessor:
                         tqdm.write(f"Error in thread: {e}")
                         self.skip_count += 1
             
-            # Final Flush
             if batch_updates:
                 self._flush_batch(batch_updates)
                 
         print(f"Metadata processing complete. Updated {self.processed_count} records.")
 
     def _flush_batch(self, data):
-        """Executes a batch update."""
+        """Executes a batch update. Uses COALESCE to protect existing dates."""
+        # SQLite COALESCE(?, date_best) checks if the new value (?) is NULL.
+        # If it is NULL, it keeps the old value (date_best).
         update_sql = """
         UPDATE MediaContent SET
-            date_best = ?, width = ?, height = ?, duration = ?,
-            bitrate = ?, video_codec = ?, extended_metadata = ?
+            date_best = COALESCE(?, date_best), 
+            width = ?, 
+            height = ?, 
+            duration = ?,
+            bitrate = ?, 
+            video_codec = ?, 
+            extended_metadata = ?
         WHERE content_hash = ?;
         """
         try:
@@ -157,7 +160,5 @@ if __name__ == "__main__":
         sys.exit(0)
     elif args.process:
         db_path = manager.OUTPUT_DIR / 'metadata.sqlite'
-        db_path.parent.mkdir(parents=True, exist_ok=True)
         with DatabaseManager(db_path) as db:
-            db.create_schema()
             MetadataProcessor(db, manager).process_metadata()
