@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 8
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -41,10 +41,12 @@ _CHANGELOG_ENTRIES = [
     "UX: Added browser compatibility warning for non-web video formats (MKV, AVI).",
     "PERFORMANCE: Replaced slow Python NORM_PATH function with native SQLite REPLACE() for massive speedup.",
     "FIX: Ensured metadata API returns valid JSON string '{}' even if DB is NULL to prevent JS display errors.",
-    "REFACTOR: Separated HTML template into 'templates/dashboard.html' (Standard Flask MVC)."
+    "REFACTOR: Separated HTML template into 'templates/dashboard.html' (Standard Flask MVC).",
+    "FEATURE: Added On-the-Fly RAW Image Conversion (NEF/CR2 -> JPEG) for browser display.",
+    "FEATURE: Added .DOCX Text Extraction for browser preview."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.7.39
+# Version: 0.8.41
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -52,9 +54,27 @@ import sqlite3
 import mimetypes
 import argparse
 import sys
+import io
 from pathlib import Path
 from collections import defaultdict
-from flask import Flask, render_template, request, jsonify, send_file, abort
+from flask import Flask, render_template, request, jsonify, send_file, abort, Response
+
+# Import Pillow for Image Conversion
+try:
+    from PIL import Image
+    # Try to enable HEIC support if installed
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    except ImportError: pass
+except ImportError:
+    Image = None
+
+# Import Docx for Word Preview
+try:
+    import docx
+except ImportError:
+    docx = None
 
 from database_manager import DatabaseManager
 from config_manager import ConfigManager
@@ -79,8 +99,7 @@ def norm_path_sql(path):
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # Kept for compatibility with queries I might have missed converting,
-    # though I tried to convert all to native REPLACE.
+    # Kept for compatibility with legacy queries
     conn.create_function("NORM_PATH", 1, norm_path_sql)
     return conn
 
@@ -307,14 +326,72 @@ def api_details(id):
     else:
         return jsonify({})
 
+@app.route('/api/content/<int:id>')
+def api_content(id):
+    """Retrieve text content for previewable files (TXT, MD, DOCX)."""
+    conn = get_db()
+    row = conn.execute("SELECT original_full_path FROM FilePathInstances WHERE file_id = ?", (id,)).fetchone()
+    conn.close()
+    
+    if not row or not os.path.exists(row[0]):
+        return "File not found.", 404
+        
+    path = Path(row[0])
+    ext = path.suffix.lower()
+    
+    try:
+        # 1. Plain Text
+        if ext in ['.txt', '.md', '.csv', '.json', '.xml', '.log', '.py', '.js', '.html', '.css', '.sh', '.bat', '.ini', '.rtf']:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                return f.read()
+        
+        # 2. Word Documents (.docx)
+        elif ext == '.docx':
+            if docx is None: return "python-docx library not installed."
+            doc = docx.Document(path)
+            fullText = []
+            for para in doc.paragraphs:
+                fullText.append(para.text)
+            return '\n'.join(fullText)
+            
+        return "Preview not supported for this file type."
+    except Exception as e:
+        return f"Error reading file: {str(e)}", 500
+
 @app.route('/api/media/<int:id>')
 def serve(id):
     conn = get_db()
     row = conn.execute("SELECT original_full_path FROM FilePathInstances WHERE file_id=?", (id,)).fetchone()
     conn.close()
+    
     if row and os.path.exists(row[0]):
+        path = Path(row[0])
+        ext = path.suffix.lower()
+        
+        # RAW Image Conversion
+        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf']:
+            if Image:
+                try:
+                    img = Image.open(path)
+                    # Convert to RGB (some RAW are RGBA or special modes)
+                    if img.mode not in ('RGB', 'L'):
+                        img = img.convert('RGB')
+                    
+                    # Save to memory buffer
+                    img_io = io.BytesIO()
+                    img.save(img_io, 'JPEG', quality=85)
+                    img_io.seek(0)
+                    return send_file(img_io, mimetype='image/jpeg')
+                except Exception as e:
+                    print(f"RAW Conversion Error: {e}")
+                    # Fallback to sending raw file (browser will likely download it)
+                    return send_file(row[0])
+            else:
+                print("Pillow not installed/loaded.")
+        
         mime, _ = mimetypes.guess_type(row[0])
         return send_file(row[0], mimetype=mime)
+        
     abort(404)
 
 @app.route('/api/report')
@@ -399,17 +476,7 @@ def api_report():
         except: pass
         
     conn.close()
-    
-    full_html = f"""
-    <div class="row g-4">
-        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Content Overview</h4>{type_html}</div></div>
-        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Top 20 Extensions (by Size)</h4>{ext_html}</div></div>
-        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Image Quality</h4>{img_html}</div></div>
-        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Video Resolution</h4>{res_html}</div></div>
-        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Audio Quality</h4>{aud_html}</div></div>
-    </div>
-    """
-    return full_html
+    return jsonify({'video': res_stats, 'image': img_stats, 'audio': aud_stats})
 
 def run_server(config_manager):
     global DB_PATH, CONFIG
