@@ -43,10 +43,11 @@ _CHANGELOG_ENTRIES = [
     "FIX: Ensured metadata API returns valid JSON string '{}' even if DB is NULL to prevent JS display errors.",
     "REFACTOR: Separated HTML template into 'templates/dashboard.html' (Standard Flask MVC).",
     "FEATURE: Added On-the-Fly RAW Image Conversion (NEF/CR2 -> JPEG) via rawpy.",
-    "FEATURE: Added .DOCX Text Extraction for browser preview."
+    "FEATURE: Added .DOCX Text Extraction for browser preview.",
+    "FEATURE: Added On-the-Fly HEIC Image Conversion (HEIC -> JPEG) via Pillow-HEIF."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.9.43
+# Version: 0.9.44
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -335,23 +336,11 @@ def serve(id):
         path = Path(row[0])
         ext = path.suffix.lower()
         
-        # RAW Conversion
-        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf']:
-            # Prefer rawpy for quality, fallback to Pillow
-            if rawpy:
-                try:
-                    with rawpy.imread(str(path)) as raw:
-                        rgb = raw.postprocess(use_camera_wb=True)
-                    if Image:
-                        img = Image.fromarray(rgb)
-                        img_io = io.BytesIO()
-                        img.save(img_io, 'JPEG', quality=85)
-                        img_io.seek(0)
-                        return send_file(img_io, mimetype='image/jpeg')
-                except Exception as e:
-                    print(f"rawpy failed: {e}")
-            
-            # Fallback to Pillow
+        # TRANSCODING: RAW & HEIC -> JPEG
+        # We handle RAWs and HEICs similarly (Open -> Convert -> Serve as JPEG)
+        transcode_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif']
+        
+        if ext in transcode_exts:
             if Image:
                 try:
                     img = Image.open(path)
@@ -360,7 +349,10 @@ def serve(id):
                     img.save(img_io, 'JPEG', quality=85)
                     img_io.seek(0)
                     return send_file(img_io, mimetype='image/jpeg')
-                except: pass
+                except Exception as e:
+                    print(f"Transcode Error: {e}")
+                    # Fallback to sending original (browser may download)
+                    return send_file(row[0])
         
         mime, _ = mimetypes.guess_type(row[0])
         return send_file(row[0], mimetype=mime)

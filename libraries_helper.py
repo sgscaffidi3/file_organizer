@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 7
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -28,10 +28,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE UPGRADE: Added 'pillow-heif' registration for .HEIC support.",
     "DATA INTEGRITY: Updated MediaInfo extractor to return RAW INTEGERS for BitRate, Duration, Width, Height (Fixes sorting/reporting).",
     "ROBUSTNESS: Added automatic fallback to MediaInfo for HEIC files if Pillow/pillow-heif fails.",
-    "FIX: Routed RAW images (.NEF, .CR2) to MediaInfo for Metadata. Pillow only reads thumbnails (160x120), MediaInfo reads true dimensions."
+    "FIX: Routed RAW images (.NEF, .CR2) to MediaInfo for Metadata. Pillow only reads thumbnails (160x120), MediaInfo reads true dimensions.",
+    "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.6.24
+# Version: 0.7.25
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -53,6 +54,7 @@ except ImportError:
 try:
     from PIL import Image, ExifTags
     PIL_AVAILABLE = True
+    # Try HEIC support
     try:
         from pillow_heif import register_heif_opener
         register_heif_opener()
@@ -111,6 +113,17 @@ def get_library_versions():
             versions[lib] = "Not Installed"
     return versions
 
+# --- Helpers ---
+def _convert_to_degrees(value):
+    """Helper to convert GPS DMS tuple to decimal degrees."""
+    try:
+        d = float(value[0])
+        m = float(value[1])
+        s = float(value[2])
+        return d + (m / 60.0) + (s / 3600.0)
+    except:
+        return 0.0
+
 # --- Specialized Extractors ---
 
 def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
@@ -125,15 +138,45 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
             metadata['Height'] = img.height
             metadata['Format'] = img.format
             
-            # Basic EXIF
+            # EXIF Extraction
             exif_raw = img.getexif()
             if exif_raw:
                 metadata['Exif_Tags_Count'] = len(exif_raw)
                 for tag_id, value in exif_raw.items():
                     tag = ExifTags.TAGS.get(tag_id, tag_id)
+                    
+                    # Basic Info
                     if tag == 'Make': metadata['Make'] = str(value)
                     if tag == 'Model': metadata['Model'] = str(value)
                     if tag == 'DateTime': metadata['Recorded_Date'] = str(value)
+                    
+                    # Photography Stats
+                    if tag == 'ISOSpeedRatings': metadata['ISO'] = str(value)
+                    if tag == 'FNumber': metadata['Aperture'] = f"f/{float(value)}"
+                    if tag == 'ExposureTime': metadata['Shutter_Speed'] = f"{value} sec"
+                    if tag == 'FocalLength': metadata['Focal_Length'] = f"{float(value)}mm"
+                    
+                    # GPS
+                    if tag == 'GPSInfo':
+                        try:
+                            # GPSInfo is a dict of IDs itself
+                            gps_data = {}
+                            for key in value.keys():
+                                name = ExifTags.GPSTAGS.get(key, key)
+                                gps_data[name] = value[key]
+                            
+                            if 'GPSLatitude' in gps_data and 'GPSLongitude' in gps_data:
+                                lat = _convert_to_degrees(gps_data['GPSLatitude'])
+                                lon = _convert_to_degrees(gps_data['GPSLongitude'])
+                                
+                                if gps_data.get('GPSLatitudeRef') == 'S': lat = -lat
+                                if gps_data.get('GPSLongitudeRef') == 'W': lon = -lon
+                                
+                                metadata['GPS_Latitude'] = lat
+                                metadata['GPS_Longitude'] = lon
+                                metadata['GPS_Coordinates'] = f"{lat:.5f}, {lon:.5f}"
+                        except:
+                            pass # GPS parsing failed, skip it
 
     except Exception as e:
         return {"Pillow_Error": str(e)}
@@ -278,8 +321,7 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
     # Standard Images (Pillow is good)
     img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
     
-    # RAW Images (Pillow reads thumbnails, MediaInfo reads full headers)
-    # We route these to MediaInfo to get correct Dimensions
+    # RAW Images
     raw_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf']
 
     if ext in ['.heic', '.heif']:
@@ -319,7 +361,7 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
         specialized_meta = extract_archive_metadata(file_path)
         
     else:
-        # Audio/Video/Unknown
+        # Fallback to MediaInfo for Audio/Video/Unknown
         if verbose:
             specialized_meta = extract_video_metadata_verbose(file_path)
         else:
@@ -331,9 +373,11 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
 
 
 def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
+    """(Internal) Exhaustive MediaInfo extraction."""
     results = {}
     if not MEDIINFO_AVAILABLE:
         return {"MediaInfo_Error": "pymediainfo not installed"}
+        
     try:
         media_info = MediaInfo.parse(str(file_path))
         for track in media_info.tracks:
@@ -346,6 +390,7 @@ def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
             track_dict = track.to_data()
             for key, value in track_dict.items():
                 if value is None or key in ['track_type', 'track_id']: continue
+                
                 clean_key = f"{prefix}_{key.replace('_', ' ').title().replace(' ', '_')}"
                 if clean_key not in results:
                     results[clean_key] = value
