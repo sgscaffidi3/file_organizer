@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 9
+_MINOR_VERSION = 10
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -47,10 +47,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added On-the-Fly HEIC Image Conversion (HEIC -> JPEG) via Pillow-HEIF.",
     "NETWORKING: Changed host to '0.0.0.0' to allow access from other computers on the LAN.",
     "FIX: Added Cache-Busting (?t=timestamp) to image previews to force browser to load High-Res RAW conversions.",
-    "DEBUG: Added console logging for RAW conversion attempts."
+    "DEBUG: Added console logging for RAW conversion attempts.",
+    "FEATURE: Added On-the-Fly Video Transcoding (MKV/AVI/WMV -> MP4) using FFmpeg streaming."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.9.48
+# Version: 0.10.49
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -59,9 +60,11 @@ import mimetypes
 import argparse
 import sys
 import io
+import subprocess
+import shutil
 from pathlib import Path
 from collections import defaultdict
-from flask import Flask, render_template, request, jsonify, send_file, abort, Response
+from flask import Flask, render_template, request, jsonify, send_file, abort, Response, stream_with_context
 
 # Import Pillow for Image Conversion
 try:
@@ -96,6 +99,7 @@ app = Flask(__name__, template_folder=str(template_dir))
 
 DB_PATH = None
 CONFIG = None
+FFMPEG_AVAIL = shutil.which('ffmpeg') is not None
 
 def norm_path_sql(path):
     if path is None: return ""
@@ -113,6 +117,35 @@ def format_size(size_bytes):
         if size_bytes < 1024: return f"{size_bytes:.2f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
+
+def transcode_video_stream(path):
+    """
+    Generates a stream of bytes from FFmpeg, transcoding the input 
+    to fragmented MP4 (H.264/AAC) for browser playback.
+    """
+    cmd = [
+        'ffmpeg',
+        '-i', str(path),
+        '-c:v', 'libx264',      # Video Codec
+        '-preset', 'ultrafast', # Speed over compression
+        '-c:a', 'aac',          # Audio Codec
+        '-f', 'mp4',            # Container
+        '-movflags', 'frag_keyframe+empty_moov', # Required for streaming MP4
+        'pipe:1'                # Output to stdout
+    ]
+    
+    # Start FFmpeg process
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**6)
+    
+    try:
+        while True:
+            data = proc.stdout.read(4096)
+            if not data:
+                break
+            yield data
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
 
 # --- ROUTES ---
 @app.route('/')
@@ -371,6 +404,12 @@ def serve(id):
                 except Exception as e:
                      print(f"[Pillow] Failed: {e}")
         
+        # On-the-Fly Video Transcoding (for non-native formats)
+        non_native_video = ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts']
+        if FFMPEG_AVAIL and ext in non_native_video:
+            print(f"[Media] Transcoding {ext} video: {path.name}")
+            return Response(stream_with_context(transcode_video_stream(path)), mimetype='video/mp4')
+
         mime, _ = mimetypes.guess_type(row[0])
         return send_file(row[0], mimetype=mime)
     abort(404)
@@ -462,6 +501,10 @@ def run_server(config_manager):
         return
     print(f"Starting Dashboard on http://127.0.0.1:5000")
     print(f"Database: {DB_PATH}")
+    if FFMPEG_AVAIL:
+        print("✅ FFmpeg detected. On-the-fly video transcoding enabled.")
+    else:
+        print("⚠️ FFmpeg not found. MKV/AVI/WMV playback disabled.")
     app.run(host='0.0.0.0', port=5000, debug=False)
 
 if __name__ == '__main__':
