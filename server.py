@@ -59,10 +59,11 @@ _CHANGELOG_ENTRIES = [
     "DEBUG: Implemented threaded stderr reader to print FFmpeg logs to console in real-time.",
     "FIX: Resolved absolute path for FFmpeg input to prevent 'No such file' errors on nested directories.",
     "DEBUG: Simplified stderr handling to write directly to sys.stderr for immediate feedback.",
-    "PERFORMANCE: Removed -analyzeduration/-probesize flags which were causing startup hangs on large files."
+    "PERFORMANCE: Removed -analyzeduration/-probesize flags which were causing startup hangs on large files.",
+    "CRITICAL FIX: Set `cwd` in subprocess to FFmpeg binary directory to ensure DLLs are found."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.60
+# Version: 0.10.61
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -149,7 +150,6 @@ def transcode_video_stream(path_str):
     # 2. Build Command
     cmd = [FFMPEG_BINARY, '-y']
     
-    # Removed heavy analysis flags to speed up start
     cmd.extend(['-i', str(abs_path)])
     
     # Video
@@ -161,11 +161,11 @@ def transcode_video_stream(path_str):
     if settings.get('crf'):
         cmd.extend(['-crf', settings.get('crf')])
 
-    # WEB COMPATIBILITY: Force standard pixel format and baseline profile
+    # WEB COMPATIBILITY
     cmd.extend(['-pix_fmt', 'yuv420p'])
     cmd.extend(['-profile:v', 'baseline'])
     
-    # LATENCY: Zero latency is critical for streaming response time
+    # LATENCY
     cmd.extend(['-tune', 'zerolatency'])
 
     # Audio
@@ -175,7 +175,7 @@ def transcode_video_stream(path_str):
     if settings.get('extra_args'):
         cmd.extend(settings.get('extra_args'))
 
-    # Container (Fragmented MP4 for streaming)
+    # Container (Fragmented MP4)
     cmd.extend([
         '-f', 'mp4',
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 
@@ -186,24 +186,25 @@ def transcode_video_stream(path_str):
     
     print(f"[FFmpeg] Command: {' '.join(cmd)}")
     
+    # CRITICAL: Set CWD to FFmpeg folder so it finds its DLLs
+    cwd = os.path.dirname(FFMPEG_BINARY)
+    
     # 3. Execution
-    # Simplified subprocess call to reduce Windows pipe locking issues
     proc = subprocess.Popen(
         cmd, 
         stdout=subprocess.PIPE, 
-        stderr=sys.stderr, # Direct to console
-        bufsize=0          # Unbuffered
+        stderr=sys.stderr, 
+        bufsize=0,
+        cwd=cwd # <--- The fix for custom builds
     )
     
     try:
-        # Read in larger chunks (32KB) for efficiency
         while True:
             data = proc.stdout.read(32768)
             if not data:
                 break
             yield data
             
-            # Check for early exit
             if proc.poll() is not None and proc.returncode != 0:
                 print(f"[FFmpeg] Process exited with error: {proc.returncode}")
                 break
