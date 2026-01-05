@@ -739,9 +739,16 @@ def api_report():
 def run_server(config_manager):
     global DB_PATH, CONFIG
     CONFIG = config_manager
-    DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
-    if not DB_PATH.exists(): return
-    print("Starting Dashboard on http://127.0.0.1:5000")
+    # DB_PATH might have been set externally by main.py
+    if DB_PATH is None:
+        DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
+        
+    if not Path(DB_PATH).exists(): 
+        print(f"Error: Database not found at {DB_PATH}")
+        return
+        
+    print(f"Starting Dashboard on http://127.0.0.1:5000")
+    print(f"Database: {DB_PATH}")
     app.run(port=5000, debug=False)
 
 if __name__ == '__main__':
