@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 8
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -29,10 +29,11 @@ _CHANGELOG_ENTRIES = [
     "DATA INTEGRITY: Updated MediaInfo extractor to return RAW INTEGERS for BitRate, Duration, Width, Height (Fixes sorting/reporting).",
     "ROBUSTNESS: Added automatic fallback to MediaInfo for HEIC files if Pillow/pillow-heif fails.",
     "FIX: Routed RAW images (.NEF, .CR2) to MediaInfo for Metadata. Pillow only reads thumbnails (160x120), MediaInfo reads true dimensions.",
-    "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates."
+    "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates.",
+    "FEATURE: Implemented Deep EXIF Parsing (ExifIFD and GPSIFD) to capture Altitude, Brightness, Bias, and detailed Flash status."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.7.25
+# Version: 0.8.27
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -52,9 +53,8 @@ except ImportError:
     MEDIINFO_AVAILABLE = False
 
 try:
-    from PIL import Image, ExifTags
+    from PIL import Image, ExifTags, TiffImagePlugin
     PIL_AVAILABLE = True
-    # Try HEIC support
     try:
         from pillow_heif import register_heif_opener
         register_heif_opener()
@@ -124,10 +124,28 @@ def _convert_to_degrees(value):
     except:
         return 0.0
 
+def _parse_fraction(val):
+    """Safely converts IFD rational tuple (num, den) to float."""
+    try:
+        if isinstance(val, tuple) and len(val) == 2:
+            return val[0] / val[1] if val[1] != 0 else 0
+        return float(val)
+    except:
+        return 0
+
+def _parse_flash(val):
+    """Decodes Flash bitmask."""
+    try:
+        v = int(val)
+        # Simple check for bit 0 (fired)
+        return "Flash fired" if (v & 1) else "Flash did not fire"
+    except:
+        return str(val)
+
 # --- Specialized Extractors ---
 
 def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts metadata from an image file using Pillow."""
+    """Extracts Deep metadata from an image file using Pillow."""
     if not PIL_AVAILABLE:
         return {"Pillow_Error": "Pillow library not installed"}
     
@@ -138,45 +156,71 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
             metadata['Height'] = img.height
             metadata['Format'] = img.format
             
-            # EXIF Extraction
-            exif_raw = img.getexif()
-            if exif_raw:
-                metadata['Exif_Tags_Count'] = len(exif_raw)
-                for tag_id, value in exif_raw.items():
+            # 1. Base EXIF (0th IFD)
+            exif = img.getexif()
+            if not exif:
+                return metadata # Return what we have
+
+            metadata['Exif_Tags_Count'] = len(exif)
+            
+            # Map Base Tags
+            for tag_id, value in exif.items():
+                tag = ExifTags.TAGS.get(tag_id, tag_id)
+                if tag == 'Make': metadata['Make'] = str(value).strip()
+                if tag == 'Model': metadata['Model'] = str(value).strip()
+                if tag == 'DateTime': metadata['Recorded_Date'] = str(value)
+                if tag == 'Software': metadata['Software'] = str(value)
+
+            # 2. ExifIFD (Sub-Block 0x8769) - Detailed Photo Data
+            # Brightness, Shutter, Aperture live here
+            if 0x8769 in exif:
+                sub_exif = exif.get_ifd(0x8769)
+                for tag_id, value in sub_exif.items():
                     tag = ExifTags.TAGS.get(tag_id, tag_id)
                     
-                    # Basic Info
-                    if tag == 'Make': metadata['Make'] = str(value)
-                    if tag == 'Model': metadata['Model'] = str(value)
-                    if tag == 'DateTime': metadata['Recorded_Date'] = str(value)
-                    
-                    # Photography Stats
                     if tag == 'ISOSpeedRatings': metadata['ISO'] = str(value)
-                    if tag == 'FNumber': metadata['Aperture'] = f"f/{float(value)}"
-                    if tag == 'ExposureTime': metadata['Shutter_Speed'] = f"{value} sec"
-                    if tag == 'FocalLength': metadata['Focal_Length'] = f"{float(value)}mm"
-                    
-                    # GPS
-                    if tag == 'GPSInfo':
-                        try:
-                            # GPSInfo is a dict of IDs itself
-                            gps_data = {}
-                            for key in value.keys():
-                                name = ExifTags.GPSTAGS.get(key, key)
-                                gps_data[name] = value[key]
-                            
-                            if 'GPSLatitude' in gps_data and 'GPSLongitude' in gps_data:
-                                lat = _convert_to_degrees(gps_data['GPSLatitude'])
-                                lon = _convert_to_degrees(gps_data['GPSLongitude'])
-                                
-                                if gps_data.get('GPSLatitudeRef') == 'S': lat = -lat
-                                if gps_data.get('GPSLongitudeRef') == 'W': lon = -lon
-                                
-                                metadata['GPS_Latitude'] = lat
-                                metadata['GPS_Longitude'] = lon
-                                metadata['GPS_Coordinates'] = f"{lat:.5f}, {lon:.5f}"
-                        except:
-                            pass # GPS parsing failed, skip it
+                    if tag == 'FNumber': metadata['Aperture'] = f"f/{_parse_fraction(value):.1f}"
+                    if tag == 'ExposureTime': metadata['Shutter_Speed'] = f"{value} sec" # Often kept as Fraction object or float
+                    if tag == 'FocalLength': metadata['Focal_Length'] = f"{_parse_fraction(value)} mm"
+                    if tag == 'BrightnessValue': metadata['Brightness'] = f"{_parse_fraction(value):.2f} EV"
+                    if tag == 'ExposureBiasValue': metadata['Exposure_Bias'] = f"{_parse_fraction(value):.2f} EV"
+                    if tag == 'Flash': metadata['Flash'] = _parse_flash(value)
+                    if tag == 'LensModel': metadata['Lens'] = str(value)
+
+            # 3. GPSIFD (Sub-Block 0x8825) - Detailed Location
+            # Altitude lives here
+            if 0x8825 in exif:
+                gps_info = exif.get_ifd(0x8825)
+                gps_data = {}
+                
+                # Map keys to names using GPSTAGS
+                for key, val in gps_info.items():
+                    name = ExifTags.GPSTAGS.get(key, key)
+                    gps_data[name] = val
+
+                # Lat/Lon
+                if 'GPSLatitude' in gps_data and 'GPSLongitude' in gps_data:
+                    lat = _convert_to_degrees(gps_data['GPSLatitude'])
+                    lon = _convert_to_degrees(gps_data['GPSLongitude'])
+                    if gps_data.get('GPSLatitudeRef') == 'S': lat = -lat
+                    if gps_data.get('GPSLongitudeRef') == 'W': lon = -lon
+                    metadata['GPS_Latitude'] = lat
+                    metadata['GPS_Longitude'] = lon
+                    metadata['GPS_Coordinates'] = f"{lat:.5f}, {lon:.5f}"
+
+                # Altitude
+                if 'GPSAltitude' in gps_data:
+                    alt = _parse_fraction(gps_data['GPSAltitude'])
+                    # Ref: 0 = Above Sea Level, 1 = Below Sea Level
+                    ref = gps_data.get('GPSAltitudeRef', b'\x00')
+                    # Handle byte vs int ref
+                    if isinstance(ref, bytes):
+                        is_below = (ord(ref) == 1)
+                    else:
+                        is_below = (int(ref) == 1)
+                        
+                    if is_below: alt = -alt
+                    metadata['Altitude'] = f"{alt:.1f} m"
 
     except Exception as e:
         return {"Pillow_Error": str(e)}
@@ -298,10 +342,7 @@ def extract_ebook_metadata(file_path: Path) -> Dict[str, Any]:
 # --- Main Router ---
 
 def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
-    """
-    Unified entry point. Dispatches to specialized extractors based on extension,
-    falling back to MediaInfo for AV/Unknown types.
-    """
+    """Unified entry point."""
     results = {}
     
     # 1. Basic OS Stats
@@ -318,14 +359,10 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
     # 2. Dispatch Logic
     specialized_meta = {}
     
-    # Standard Images (Pillow is good)
     img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
-    
-    # RAW Images
     raw_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf']
 
     if ext in ['.heic', '.heif']:
-        # HEIC: Try Pillow (with plugin), fallback to MediaInfo
         specialized_meta = extract_image_metadata(file_path)
         if 'Pillow_Error' in specialized_meta:
             specialized_meta = extract_video_metadata(file_path)
@@ -335,7 +372,6 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
         specialized_meta = extract_image_metadata(file_path)
 
     elif ext in raw_exts:
-        # RAW FIX: Use MediaInfo for accurate dimensions
         specialized_meta = extract_video_metadata(file_path)
         specialized_meta['_Source'] = 'MediaInfo (RAW)'
     
@@ -361,13 +397,11 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
         specialized_meta = extract_archive_metadata(file_path)
         
     else:
-        # Fallback to MediaInfo for Audio/Video/Unknown
         if verbose:
             specialized_meta = extract_video_metadata_verbose(file_path)
         else:
             specialized_meta = extract_video_metadata(file_path)
 
-    # Merge results
     results.update(specialized_meta)
     return results
 
@@ -399,7 +433,7 @@ def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
     return results
 
 def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
-    """Standard MediaInfo extraction."""
+    """(Internal) Standard MediaInfo extraction."""
     results = {}
     if not MEDIINFO_AVAILABLE:
         return {"MediaInfo_Error": "pymediainfo not installed"}
@@ -418,7 +452,6 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
                 if track.height: results["Height"] = int(track.height)
                 results["Frame_Rate"] = track.frame_rate
             
-            # RAW images often appear as 'Image' track type in MediaInfo
             elif track.track_type == "Image":
                 if track.width: results["Width"] = int(track.width)
                 if track.height: results["Height"] = int(track.height)
