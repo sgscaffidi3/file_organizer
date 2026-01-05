@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 8
+_MINOR_VERSION = 9
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
@@ -30,10 +30,11 @@ _CHANGELOG_ENTRIES = [
     "ROBUSTNESS: Added automatic fallback to MediaInfo for HEIC files if Pillow/pillow-heif fails.",
     "FIX: Routed RAW images (.NEF, .CR2) to MediaInfo for Metadata. Pillow only reads thumbnails (160x120), MediaInfo reads true dimensions.",
     "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates.",
-    "FEATURE: Implemented Deep EXIF Parsing (ExifIFD and GPSIFD) to capture Altitude, Brightness, Bias, and detailed Flash status."
+    "FEATURE: Implemented Deep EXIF Parsing (ExifIFD and GPSIFD) to capture Altitude, Brightness, Bias, and detailed Flash status.",
+    "CRITICAL FIX: Switched RAW Metadata extraction to 'rawpy'. MediaInfo/Pillow often read the embedded thumbnail (160x120). rawpy ensures full sensor dimensions."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.8.27
+# Version: 0.9.28
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -53,7 +54,7 @@ except ImportError:
     MEDIINFO_AVAILABLE = False
 
 try:
-    from PIL import Image, ExifTags, TiffImagePlugin
+    from PIL import Image, ExifTags
     PIL_AVAILABLE = True
     try:
         from pillow_heif import register_heif_opener
@@ -64,6 +65,12 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
     HEIC_AVAILABLE = False
+
+try:
+    import rawpy
+    RAWPY_AVAILABLE = True
+except ImportError:
+    RAWPY_AVAILABLE = False
 
 try:
     from tqdm import tqdm
@@ -115,7 +122,6 @@ def get_library_versions():
 
 # --- Helpers ---
 def _convert_to_degrees(value):
-    """Helper to convert GPS DMS tuple to decimal degrees."""
     try:
         d = float(value[0])
         m = float(value[1])
@@ -125,7 +131,6 @@ def _convert_to_degrees(value):
         return 0.0
 
 def _parse_fraction(val):
-    """Safely converts IFD rational tuple (num, den) to float."""
     try:
         if isinstance(val, tuple) and len(val) == 2:
             return val[0] / val[1] if val[1] != 0 else 0
@@ -134,15 +139,63 @@ def _parse_fraction(val):
         return 0
 
 def _parse_flash(val):
-    """Decodes Flash bitmask."""
     try:
         v = int(val)
-        # Simple check for bit 0 (fired)
         return "Flash fired" if (v & 1) else "Flash did not fire"
     except:
         return str(val)
 
 # --- Specialized Extractors ---
+
+def extract_raw_metadata(file_path: Path) -> Dict[str, Any]:
+    """
+    Extracts metadata from RAW images using rawpy.
+    This guarantees full sensor dimensions vs embedded thumbnails.
+    """
+    if not RAWPY_AVAILABLE:
+        # Fallback to MediaInfo if rawpy is missing, but warn
+        return extract_video_metadata(file_path)
+
+    metadata = {}
+    try:
+        with rawpy.imread(str(file_path)) as raw:
+            # raw.sizes provides the full sensor size
+            # .raw_width / .raw_height are the full uncropped dimensions
+            metadata['Width'] = raw.sizes.width
+            metadata['Height'] = raw.sizes.height
+            metadata['Format'] = "RAW"
+            metadata['Camera_Make'] = raw.camera_white_level_per_channel # Not directly available, rawpy focuses on pixel data
+            
+            # rawpy doesn't parse EXIF strings well (it focuses on image data).
+            # We combine it with Pillow for tags if possible.
+    except Exception as e:
+        return {"Raw_Error": str(e)}
+
+    # Secondary Pass: Use Pillow for EXIF Tags (Date, ISO, etc)
+    # Pillow is good at tags, bad at RAW dimensions.
+    if PIL_AVAILABLE:
+        try:
+            with Image.open(file_path) as img:
+                exif = img.getexif()
+                if exif:
+                    for tag_id, value in exif.items():
+                        tag = ExifTags.TAGS.get(tag_id, tag_id)
+                        if tag == 'DateTime': metadata['Recorded_Date'] = str(value)
+                        if tag == 'Make': metadata['Make'] = str(value).strip()
+                        if tag == 'Model': metadata['Model'] = str(value).strip()
+                        
+                        # Deep EXIF (ISO/Aperture)
+                        if tag_id == 0x8769: # ExifIFD
+                            sub = exif.get_ifd(0x8769)
+                            for k, v in sub.items():
+                                t = ExifTags.TAGS.get(k, k)
+                                if t == 'ISOSpeedRatings': metadata['ISO'] = str(v)
+                                if t == 'FNumber': metadata['Aperture'] = f"f/{_parse_fraction(v):.1f}"
+                                if t == 'ExposureTime': metadata['Shutter_Speed'] = f"{v} sec"
+        except:
+            pass
+            
+    return metadata
 
 def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     """Extracts Deep metadata from an image file using Pillow."""
@@ -156,14 +209,10 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
             metadata['Height'] = img.height
             metadata['Format'] = img.format
             
-            # 1. Base EXIF (0th IFD)
             exif = img.getexif()
-            if not exif:
-                return metadata # Return what we have
+            if not exif: return metadata
 
             metadata['Exif_Tags_Count'] = len(exif)
-            
-            # Map Base Tags
             for tag_id, value in exif.items():
                 tag = ExifTags.TAGS.get(tag_id, tag_id)
                 if tag == 'Make': metadata['Make'] = str(value).strip()
@@ -171,34 +220,26 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
                 if tag == 'DateTime': metadata['Recorded_Date'] = str(value)
                 if tag == 'Software': metadata['Software'] = str(value)
 
-            # 2. ExifIFD (Sub-Block 0x8769) - Detailed Photo Data
-            # Brightness, Shutter, Aperture live here
             if 0x8769 in exif:
                 sub_exif = exif.get_ifd(0x8769)
                 for tag_id, value in sub_exif.items():
                     tag = ExifTags.TAGS.get(tag_id, tag_id)
-                    
                     if tag == 'ISOSpeedRatings': metadata['ISO'] = str(value)
                     if tag == 'FNumber': metadata['Aperture'] = f"f/{_parse_fraction(value):.1f}"
-                    if tag == 'ExposureTime': metadata['Shutter_Speed'] = f"{value} sec" # Often kept as Fraction object or float
+                    if tag == 'ExposureTime': metadata['Shutter_Speed'] = f"{value} sec"
                     if tag == 'FocalLength': metadata['Focal_Length'] = f"{_parse_fraction(value)} mm"
                     if tag == 'BrightnessValue': metadata['Brightness'] = f"{_parse_fraction(value):.2f} EV"
                     if tag == 'ExposureBiasValue': metadata['Exposure_Bias'] = f"{_parse_fraction(value):.2f} EV"
                     if tag == 'Flash': metadata['Flash'] = _parse_flash(value)
                     if tag == 'LensModel': metadata['Lens'] = str(value)
 
-            # 3. GPSIFD (Sub-Block 0x8825) - Detailed Location
-            # Altitude lives here
             if 0x8825 in exif:
                 gps_info = exif.get_ifd(0x8825)
                 gps_data = {}
-                
-                # Map keys to names using GPSTAGS
                 for key, val in gps_info.items():
                     name = ExifTags.GPSTAGS.get(key, key)
                     gps_data[name] = val
 
-                # Lat/Lon
                 if 'GPSLatitude' in gps_data and 'GPSLongitude' in gps_data:
                     lat = _convert_to_degrees(gps_data['GPSLatitude'])
                     lon = _convert_to_degrees(gps_data['GPSLongitude'])
@@ -208,17 +249,10 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
                     metadata['GPS_Longitude'] = lon
                     metadata['GPS_Coordinates'] = f"{lat:.5f}, {lon:.5f}"
 
-                # Altitude
                 if 'GPSAltitude' in gps_data:
                     alt = _parse_fraction(gps_data['GPSAltitude'])
-                    # Ref: 0 = Above Sea Level, 1 = Below Sea Level
                     ref = gps_data.get('GPSAltitudeRef', b'\x00')
-                    # Handle byte vs int ref
-                    if isinstance(ref, bytes):
-                        is_below = (ord(ref) == 1)
-                    else:
-                        is_below = (int(ref) == 1)
-                        
+                    is_below = (ord(ref) == 1) if isinstance(ref, bytes) else (int(ref) == 1)
                     if is_below: alt = -alt
                     metadata['Altitude'] = f"{alt:.1f} m"
 
@@ -227,7 +261,6 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
     return metadata
 
 def extract_svg_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts dimensions from SVG XML."""
     try:
         tree = ET.parse(file_path)
         root = tree.getroot()
@@ -239,10 +272,7 @@ def extract_svg_metadata(file_path: Path) -> Dict[str, Any]:
         return {"SVG_Error": str(e)}
 
 def extract_pdf_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts page count and info from PDFs."""
-    if not PDF_AVAILABLE:
-        return {"PDF_Error": "PyPDF2 library not installed"}
-    
+    if not PDF_AVAILABLE: return {"PDF_Error": "PyPDF2 library not installed"}
     metadata = {}
     try:
         with open(file_path, 'rb') as f:
@@ -251,49 +281,36 @@ def extract_pdf_metadata(file_path: Path) -> Dict[str, Any]:
             if reader.metadata:
                 if reader.metadata.author: metadata['Author'] = reader.metadata.author
                 if reader.metadata.title: metadata['Title'] = reader.metadata.title
-    except Exception as e:
-        return {"PDF_Error": str(e)}
+    except Exception as e: return {"PDF_Error": str(e)}
     return metadata
 
 def extract_docx_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts metadata from Word documents."""
-    if not DOCX_AVAILABLE:
-        return {"Office_Error": "python-docx library not installed"}
-    
+    if not DOCX_AVAILABLE: return {"Office_Error": "python-docx library not installed"}
     metadata = {}
     try:
         doc = docx.Document(file_path)
         props = doc.core_properties
         if props.author: metadata['Author'] = props.author
         if props.title: metadata['Title'] = props.title
-        
         words = 0
-        for para in doc.paragraphs:
-            words += len(para.text.split())
+        for para in doc.paragraphs: words += len(para.text.split())
         metadata['Word_Count'] = words
-    except Exception as e:
-        return {"Office_Error": str(e)}
+    except Exception as e: return {"Office_Error": str(e)}
     return metadata
 
 def extract_pptx_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts metadata from PowerPoint presentations."""
-    if not PPTX_AVAILABLE:
-        return {"Office_Error": "python-pptx library not installed"}
-    
+    if not PPTX_AVAILABLE: return {"Office_Error": "python-pptx library not installed"}
     metadata = {}
     try:
         prs = pptx.Presentation(file_path)
         if prs.core_properties.author: metadata['Author'] = prs.core_properties.author
         if prs.core_properties.title: metadata['Title'] = prs.core_properties.title
         metadata['Slide_Count'] = len(prs.slides)
-    except Exception as e:
-        return {"Office_Error": str(e)}
+    except Exception as e: return {"Office_Error": str(e)}
     return metadata
 
 def extract_xlsx_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts metadata from Excel spreadsheets."""
-    if not XLSX_AVAILABLE:
-        return {"Office_Error": "openpyxl library not installed"}
+    if not XLSX_AVAILABLE: return {"Office_Error": "openpyxl library not installed"}
     try:
         wb = openpyxl.load_workbook(file_path, read_only=True)
         props = wb.properties
@@ -302,11 +319,9 @@ def extract_xlsx_metadata(file_path: Path) -> Dict[str, Any]:
         if props.title: meta['Title'] = props.title
         wb.close()
         return meta
-    except Exception as e:
-        return {"Office_Error": str(e)}
+    except Exception as e: return {"Office_Error": str(e)}
 
 def extract_archive_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts file counts from ZIP/TAR archives."""
     meta = {}
     try:
         if zipfile.is_zipfile(file_path):
@@ -317,46 +332,33 @@ def extract_archive_metadata(file_path: Path) -> Dict[str, Any]:
             with tarfile.open(file_path, 'r') as t:
                 meta['File_Count'] = len(t.getnames())
                 meta['Archive_Type'] = "TAR"
-        else:
-            return {"Archive_Error": "Unsupported or Corrupt Archive"}
-    except Exception as e:
-        return {"Archive_Error": str(e)}
+        else: return {"Archive_Error": "Unsupported or Corrupt Archive"}
+    except Exception as e: return {"Archive_Error": str(e)}
     return meta
 
 def extract_ebook_metadata(file_path: Path) -> Dict[str, Any]:
-    """Extracts metadata from EPUBs."""
-    if not EBOOK_AVAILABLE:
-        return {"Ebook_Error": "EbookLib not installed"}
+    if not EBOOK_AVAILABLE: return {"Ebook_Error": "EbookLib not installed"}
     try:
         book = epub.read_epub(str(file_path)) 
         meta = {}
-        if book.get_metadata('DC', 'title'):
-            meta['Title'] = book.get_metadata('DC', 'title')[0][0]
-        if book.get_metadata('DC', 'creator'):
-            meta['Author'] = book.get_metadata('DC', 'creator')[0][0]
+        if book.get_metadata('DC', 'title'): meta['Title'] = book.get_metadata('DC', 'title')[0][0]
+        if book.get_metadata('DC', 'creator'): meta['Author'] = book.get_metadata('DC', 'creator')[0][0]
         return meta
-    except Exception as e:
-        return {"Ebook_Error": str(e)}
+    except Exception as e: return {"Ebook_Error": str(e)}
 
 
 # --- Main Router ---
 
 def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
-    """Unified entry point."""
     results = {}
-    
-    # 1. Basic OS Stats
     try:
         stats = file_path.stat()
         results["File Size"] = stats.st_size
         results["Created"] = datetime.datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
         results["Modified"] = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-    except Exception as e:
-        results["OS_Error"] = str(e)
+    except Exception as e: results["OS_Error"] = str(e)
 
     ext = file_path.suffix.lower()
-
-    # 2. Dispatch Logic
     specialized_meta = {}
     
     img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
@@ -372,72 +374,44 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
         specialized_meta = extract_image_metadata(file_path)
 
     elif ext in raw_exts:
-        specialized_meta = extract_video_metadata(file_path)
-        specialized_meta['_Source'] = 'MediaInfo (RAW)'
+        # RAW FIX: Use rawpy for correct dimensions, Pillow for tags
+        specialized_meta = extract_raw_metadata(file_path)
     
-    elif ext == '.svg':
-        specialized_meta = extract_svg_metadata(file_path)
-    
-    elif ext in ['.pdf']:
-        specialized_meta = extract_pdf_metadata(file_path)
-        
-    elif ext in ['.docx', '.doc']:
-        specialized_meta = extract_docx_metadata(file_path)
-    
-    elif ext in ['.pptx']:
-        specialized_meta = extract_pptx_metadata(file_path)
-        
-    elif ext in ['.xlsx', '.xls']:
-        specialized_meta = extract_xlsx_metadata(file_path)
-        
-    elif ext in ['.epub', '.mobi']:
-        specialized_meta = extract_ebook_metadata(file_path)
-        
-    elif ext in ['.zip', '.tar', '.gz', '.7z', '.rar']:
-        specialized_meta = extract_archive_metadata(file_path)
-        
+    elif ext == '.svg': specialized_meta = extract_svg_metadata(file_path)
+    elif ext in ['.pdf']: specialized_meta = extract_pdf_metadata(file_path)
+    elif ext in ['.docx', '.doc']: specialized_meta = extract_docx_metadata(file_path)
+    elif ext in ['.pptx']: specialized_meta = extract_pptx_metadata(file_path)
+    elif ext in ['.xlsx', '.xls']: specialized_meta = extract_xlsx_metadata(file_path)
+    elif ext in ['.epub', '.mobi']: specialized_meta = extract_ebook_metadata(file_path)
+    elif ext in ['.zip', '.tar', '.gz', '.7z', '.rar']: specialized_meta = extract_archive_metadata(file_path)
     else:
-        if verbose:
-            specialized_meta = extract_video_metadata_verbose(file_path)
-        else:
-            specialized_meta = extract_video_metadata(file_path)
+        if verbose: specialized_meta = extract_video_metadata_verbose(file_path)
+        else: specialized_meta = extract_video_metadata(file_path)
 
     results.update(specialized_meta)
     return results
 
 
 def extract_video_metadata_verbose(file_path: Path) -> Dict[str, Any]:
-    """(Internal) Exhaustive MediaInfo extraction."""
     results = {}
-    if not MEDIINFO_AVAILABLE:
-        return {"MediaInfo_Error": "pymediainfo not installed"}
-        
+    if not MEDIINFO_AVAILABLE: return {"MediaInfo_Error": "pymediainfo not installed"}
     try:
         media_info = MediaInfo.parse(str(file_path))
         for track in media_info.tracks:
             track_type = track.track_type
-            if track_type in ["Audio", "Text"]:
-                prefix = f"{track_type}_{track.track_id or '0'}"
-            else:
-                prefix = track_type
-            
+            if track_type in ["Audio", "Text"]: prefix = f"{track_type}_{track.track_id or '0'}"
+            else: prefix = track_type
             track_dict = track.to_data()
             for key, value in track_dict.items():
                 if value is None or key in ['track_type', 'track_id']: continue
-                
                 clean_key = f"{prefix}_{key.replace('_', ' ').title().replace(' ', '_')}"
-                if clean_key not in results:
-                    results[clean_key] = value
-    except Exception as e:
-        results["MediaInfo_Error"] = str(e)
+                if clean_key not in results: results[clean_key] = value
+    except Exception as e: results["MediaInfo_Error"] = str(e)
     return results
 
 def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
-    """(Internal) Standard MediaInfo extraction."""
     results = {}
-    if not MEDIINFO_AVAILABLE:
-        return {"MediaInfo_Error": "pymediainfo not installed"}
-
+    if not MEDIINFO_AVAILABLE: return {"MediaInfo_Error": "pymediainfo not installed"}
     try:
         media_info = MediaInfo.parse(str(file_path))
         for track in media_info.tracks:
@@ -445,42 +419,33 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
                 results["Format"] = track.format
                 if track.duration: results["Duration"] = int(track.duration) / 1000.0 
                 results["Recorded_Date"] = track.recorded_date
-
             elif track.track_type == "Video":
                 results["Video_Format"] = track.format
                 if track.width: results["Width"] = int(track.width)
                 if track.height: results["Height"] = int(track.height)
                 results["Frame_Rate"] = track.frame_rate
-            
             elif track.track_type == "Image":
                 if track.width: results["Width"] = int(track.width)
                 if track.height: results["Height"] = int(track.height)
                 results["Format"] = track.format
-
             elif track.track_type == "Audio":
                 t_id = f"Audio_{track.track_id or '1'}"
                 results[f"{t_id}_Format"] = track.format
                 if track.sampling_rate: results[f"{t_id}_Sampling_Rate"] = int(track.sampling_rate)
                 if track.bit_rate: results["Bit_Rate"] = int(track.bit_rate)
-
-    except Exception as e:
-        results["MediaInfo_Error"] = str(e)
+    except Exception as e: results["MediaInfo_Error"] = str(e)
     return results
 
 def demo_tqdm_progress(iterable: Any = 100, desc: str = "Testing Progress Bar"):
-    if not TQDM_AVAILABLE:
-        print("tqdm is not available.")
-        return
+    if not TQDM_AVAILABLE: return
     items = range(iterable) if isinstance(iterable, int) else iterable
-    for _ in tqdm(items, desc=desc, file=sys.stdout):
-        time.sleep(0.01)
+    for _ in tqdm(items, desc=desc, file=sys.stdout): time.sleep(0.01)
     print("TQDM Demo Complete")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
     args = parser.parse_args()
-
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Library Helper Utilities")
