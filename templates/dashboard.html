@@ -458,7 +458,8 @@
             if (d.type === 'IMAGE') {
                 preview = `<img src="${src}" style="max-width:100%; max-height:100%; object-fit:contain">`;
             } else if (d.type === 'VIDEO') {
-                preview = `<div class="text-center"><video controls autoplay style="max-width:100%"><source src="${src}"></video><div class="text-muted small mt-2">Note: Browser playback supports MP4/WebM. Other formats (MKV/AVI) may require VLC.</div></div>`;
+                // UPDATE: Added type='video/mp4' to help browser identify the stream
+                preview = `<div class="text-center"><video controls autoplay style="max-width:100%"><source src="${src}" type="video/mp4"></video></div>`;
             } else if (d.type === 'AUDIO') {
                 preview = `<audio controls src="${src}"></audio>`;
             } else if (ext === 'pdf') {
