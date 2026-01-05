@@ -51,10 +51,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added On-the-Fly Video Transcoding (MKV/AVI/WMV -> MP4) using FFmpeg streaming.",
     "FEATURE: Configurable FFmpeg binary path and arguments via organizer_config.json.",
     "FIX: Enforced '-pix_fmt yuv420p' and '-ac 2' in FFmpeg to ensure browser compatibility.",
-    "FIX: Added robust path detection for FFmpeg to handle Folder paths vs Binary paths (fixes WinError 5)."
+    "FIX: Added robust path detection for FFmpeg to handle Folder paths vs Binary paths (fixes WinError 5).",
+    "PERFORMANCE: Added '-tune zerolatency' and '-g 60' to FFmpeg to fix browser playback timeouts."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.52
+# Version: 0.10.53
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -125,51 +126,54 @@ def transcode_video_stream(path):
     """
     Generates a stream of bytes from FFmpeg, transcoding the input 
     to fragmented MP4 (H.264/AAC) for browser playback.
-    
-    Reads arguments from organizer_config.json to allow customization.
     """
     if not FFMPEG_BINARY:
-        return # Should not happen due to route check
+        return 
         
     settings = CONFIG.FFMPEG_SETTINGS
     
     # 1. Base Command
-    # -analyzeduration and -probesize help start faster on network streams
-    cmd = [FFMPEG_BINARY, '-analyzeduration', '100M', '-probesize', '100M', '-i', str(path)]
+    # -analyzeduration/probesize help FFmpeg start faster on network streams or complex headers
+    cmd = [FFMPEG_BINARY, '-analyzeduration', '50M', '-probesize', '50M', '-i', str(path)]
     
-    # 2. Transcoding Settings (User Configurable)
-    # WEB COMPATIBILITY FIX: Force yuv420p pixel format. 
-    # Browsers cannot handle yuv444p or other high profiles.
+    # 2. Transcoding Settings
+    # WEB COMPATIBILITY FIX: Force yuv420p. Browsers reject yuv444 or yuv422.
     cmd.extend(['-pix_fmt', 'yuv420p'])
     
     cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
     
-    # Preset (Speed vs Quality for SW encoding)
     if settings.get('preset'):
         cmd.extend(['-preset', settings.get('preset')])
         
-    # CRF (Quality for SW encoding)
     if settings.get('crf'):
         cmd.extend(['-crf', settings.get('crf')])
 
+    # CRITICAL PERFORMANCE FLAG: Zero Latency prevents FFmpeg from buffering frames
+    # This ensures the browser gets the first byte immediately.
+    cmd.extend(['-tune', 'zerolatency'])
+
     # Audio Settings
-    # WEB COMPATIBILITY FIX: Force 2 channels. 5.1/7.1 audio often causes silence in browsers.
+    # WEB COMPATIBILITY FIX: Force 2 channels.
     cmd.extend(['-c:a', settings.get('audio_codec', 'aac'), '-ac', '2'])
     
-    # 3. User Custom Flags (e.g. HW acceleration specific options)
-    # Allows users to inject list like ["-rc", "vbr_hq", "-profile:v", "high"]
+    # 3. User Custom Flags
     if settings.get('extra_args'):
         cmd.extend(settings.get('extra_args'))
 
-    # 4. Required Streaming Flags (Do not change these)
-    # -movflags frag_keyframe+empty_moov is essential for streaming MP4 to browser without seeking support
-    cmd.extend(['-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', 'pipe:1'])
+    # 4. Container Flags
+    # -g 60: Force a keyframe every 60 frames (approx 2s). Crucial for seeking/starting.
+    cmd.extend([
+        '-f', 'mp4',
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 
+        '-g', '60', 
+        'pipe:1'
+    ])
     
-    # Debug print the command being run
     print(f"[FFmpeg] Running: {' '.join(cmd)}")
     
     # Start FFmpeg process
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**6)
+    # stderr=sys.stderr ensures errors print to the Console immediately
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=sys.stderr, bufsize=10**6)
     
     try:
         while True:
