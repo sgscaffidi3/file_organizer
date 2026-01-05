@@ -54,10 +54,12 @@ _CHANGELOG_ENTRIES = [
     "FIX: Added robust path detection for FFmpeg to handle Folder paths vs Binary paths (fixes WinError 5).",
     "PERFORMANCE: Added '-tune zerolatency' and '-g 60' to FFmpeg to fix browser playback timeouts.",
     "DEBUG: Added stderr capture to FFmpeg stream to diagnose transcoding failures.",
-    "COMPATIBILITY: Forced '-profile:v baseline' and '-reset_timestamps 1' to fix Gray Screen/0:00 duration issues."
+    "COMPATIBILITY: Forced '-profile:v baseline' and '-reset_timestamps 1' to fix Gray Screen/0:00 duration issues.",
+    "CRITICAL FIX: Set subprocess `bufsize=0` to prevent Python from holding video headers, fixing the Gray Screen hanging issue.",
+    "DEBUG: Implemented threaded stderr reader to print FFmpeg logs to console in real-time."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.55
+# Version: 0.10.57
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -68,6 +70,7 @@ import sys
 import io
 import subprocess
 import shutil
+import threading
 from pathlib import Path
 from collections import defaultdict
 from flask import Flask, render_template, request, jsonify, send_file, abort, Response, stream_with_context
@@ -124,6 +127,14 @@ def format_size(size_bytes):
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
 
+def log_reader(proc):
+    """Reads stderr from the FFmpeg process and prints it to the console."""
+    for line in iter(proc.stderr.readline, b''):
+        try:
+            print(f"[FFmpeg] {line.decode('utf-8').strip()}")
+        except:
+            pass
+
 def transcode_video_stream(path):
     """
     Generates a stream of bytes from FFmpeg, transcoding the input 
@@ -135,10 +146,11 @@ def transcode_video_stream(path):
     settings = CONFIG.FFMPEG_SETTINGS
     
     # 1. Base Command
-    # -analyzeduration/probesize help FFmpeg start faster on network streams
-    cmd = [FFMPEG_BINARY, '-analyzeduration', '100M', '-probesize', '100M', '-i', str(path)]
+    cmd = [FFMPEG_BINARY, '-analyzeduration', '50M', '-probesize', '50M', '-i', str(path)]
     
     # 2. Transcoding Settings
+    # WEB COMPATIBILITY FIX: Force yuv420p. Browsers reject yuv444 or yuv422.
+    cmd.extend(['-pix_fmt', 'yuv420p'])
     
     cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
     
@@ -148,18 +160,12 @@ def transcode_video_stream(path):
     if settings.get('crf'):
         cmd.extend(['-crf', settings.get('crf')])
 
-    # CRITICAL WEB COMPATIBILITY FLAGS
-    # ---------------------------------------------------------
-    # 1. Force YUV420P: Browsers typically cannot render 4:4:4 or 4:2:2 profiles.
-    cmd.extend(['-pix_fmt', 'yuv420p'])
-    
-    # 2. Zero Latency: Prevents FFmpeg from buffering frames before sending data.
+    # CRITICAL PERFORMANCE FLAG: Zero Latency prevents FFmpeg from buffering frames
     cmd.extend(['-tune', 'zerolatency'])
     
-    # 3. Baseline Profile: Disables B-frames. Old/Strict HTML5 players often require this
-    #    for real-time streams where they can't buffer B-frames efficiently.
+    # Baseline profile is safest for HTML5
     cmd.extend(['-profile:v', 'baseline'])
-    
+
     # Audio Settings
     # WEB COMPATIBILITY FIX: Force 2 channels and 44.1kHz standard AAC.
     cmd.extend(['-c:a', settings.get('audio_codec', 'aac'), '-ac', '2', '-ar', '44100'])
@@ -169,9 +175,8 @@ def transcode_video_stream(path):
         cmd.extend(settings.get('extra_args'))
 
     # 4. Container Flags
-    # -reset_timestamps 1: Resets input timestamps to 0. Crucial for "live" transcoding 
-    #    where the browser expects the timeline to start *now*.
-    # -g 30: Force a keyframe every 30 frames (1 sec). Fast seek/startup.
+    # -reset_timestamps 1: Resets input timestamps to 0.
+    # -movflags frag_keyframe+empty_moov+default_base_moof: REQUIRED for MP4 streaming
     cmd.extend([
         '-f', 'mp4',
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 
@@ -180,15 +185,22 @@ def transcode_video_stream(path):
         'pipe:1'
     ])
     
-    print(f"[FFmpeg] Running: {' '.join(cmd)}")
+    print(f"[FFmpeg] Command: {' '.join(cmd)}")
     
     # Start FFmpeg process
-    # stderr=sys.stderr allows you to see the actual conversion speed and errors in your console.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=sys.stderr, bufsize=10**6)
+    # bufsize=0 is CRITICAL. If buffered, Python holds the MP4 header and browser times out.
+    # stderr=subprocess.PIPE allows us to capture logs in a separate thread.
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    
+    # Start logging thread
+    t = threading.Thread(target=log_reader, args=(proc,))
+    t.daemon = True # Daemon thread dies when main thread dies
+    t.start()
     
     try:
         while True:
-            data = proc.stdout.read(4096)
+            # Read small chunks to keep the stream flowing smoothly
+            data = proc.stdout.read(1024 * 64)
             if not data:
                 break
             yield data
@@ -457,7 +469,11 @@ def serve(id):
         non_native_video = ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts']
         if FFMPEG_BINARY and ext in non_native_video:
             print(f"[Media] Transcoding {ext} video: {path.name}")
-            return Response(stream_with_context(transcode_video_stream(path)), mimetype='video/mp4')
+            # Cache-Control: no-cache prevents browser from caching partial broken streams
+            response = Response(stream_with_context(transcode_video_stream(path)), mimetype='video/mp4')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Accept-Ranges'] = 'none' 
+            return response
 
         mime, _ = mimetypes.guess_type(row[0])
         return send_file(row[0], mimetype=mime)
@@ -501,7 +517,7 @@ def api_report():
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1_000_000
+        mp = (w * h) / 1000000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
@@ -600,4 +616,3 @@ if __name__ == '__main__':
         print_version_info(__file__, "Web Server")
         sys.exit(0)
     run_server(ConfigManager())
-    
