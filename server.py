@@ -35,10 +35,13 @@ _CHANGELOG_ENTRIES = [
     "UX: Added Database Name indicator in Navbar to distinguish Source Scan vs Clean Export.",
     "FEATURE: Added 'Quality' Tab to Sidebar for browsing by Resolution/Bitrate/Megapixels.",
     "FEATURE: Added Text File Preview (.txt, .md, .csv, etc) in File Inspector.",
-    "SEARCH: Enhanced search to index 'extended_metadata', enabling search by Original Filename, Camera Model, etc."
+    "SEARCH: Enhanced search to index 'extended_metadata', enabling search by Original Filename, Camera Model, etc.",
+    "FIX: Enforced file_type_group constraints in Quality Filters (prevents Images appearing in Video lists).",
+    "FEATURE: Added PDF Preview support via Embed.",
+    "UX: Added browser compatibility warning for non-web video formats (MKV, AVI)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.33
+# Version: 0.5.35
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -528,14 +531,16 @@ HTML_TEMPLATE = """
             let preview = '<div class="text-muted">No Preview</div>';
             let src = `/api/media/${id}`;
             let ext = d.name.split('.').pop().toLowerCase();
-            let txtExts = ['txt', 'md', 'csv', 'json', 'xml', 'log', 'py', 'js', 'html', 'css', 'sh', 'bat', 'ini'];
+            let txtExts = ['txt', 'md', 'csv', 'json', 'xml', 'log', 'py', 'js', 'html', 'css', 'sh', 'bat', 'ini', 'rtf'];
             
             if (d.type === 'IMAGE') {
                 preview = `<img src="${src}" style="max-width:100%; max-height:100%; object-fit:contain">`;
             } else if (d.type === 'VIDEO') {
-                preview = `<video controls autoplay style="max-width:100%"><source src="${src}"></video>`;
+                preview = `<div class="text-center"><video controls autoplay style="max-width:100%"><source src="${src}"></video><div class="text-muted small mt-2">Note: Browser playback supports MP4/WebM. Other formats (MKV/AVI) may require VLC.</div></div>`;
             } else if (d.type === 'AUDIO') {
                 preview = `<audio controls src="${src}"></audio>`;
+            } else if (ext === 'pdf') {
+                preview = `<embed src="${src}" type="application/pdf" style="width:100%; height:100%; min-height:500px;" />`;
             } else if (txtExts.includes(ext)) {
                 // Text Preview
                 $.get(src, function(txt) {
@@ -670,7 +675,6 @@ def api_quality():
     aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0}
     for r in aud_data:
         try:
-            # Bitrate now likely Int from updated libs, but safe check strings
             val = str(r[0]).lower()
             if not val or val == 'none': continue
             val = val.replace('bps','').replace('kb/s','000').replace('k','000').strip()
@@ -711,13 +715,12 @@ def api_files():
     params = []
     
     if search:
-        # UPDATED SEARCH LOGIC: Include metadata
+        # Search includes metadata
         where.append("(NORM_PATH(fpi.original_relative_path) LIKE ? OR mc.file_type_group LIKE ? OR mc.extended_metadata LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
-        # FIXED: Logic moved out of f-string
         param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(param_val)
@@ -734,21 +737,21 @@ def api_files():
             where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
             params.append(f"%{f_val}")
     elif f_type == 'qual':
-        # Qual format: 'vid:4K+', 'img:Pro (>20 MP)', 'aud:High (>256k)'
         cat, criteria = f_val.split(':', 1)
         if cat == 'vid':
+            where.append("mc.file_type_group = 'VIDEO'")
             if '4K' in criteria: where.append("mc.height >= 2160")
             elif '1080' in criteria: where.append("mc.height >= 1080 AND mc.height < 2160")
             elif '720' in criteria: where.append("mc.height >= 720 AND mc.height < 1080")
             elif 'SD' in criteria: where.append("mc.height < 720")
         elif cat == 'img':
-            # Need calc for MP: width*height >= X
+            where.append("mc.file_type_group = 'IMAGE'")
             if 'Pro' in criteria: where.append("(mc.width * mc.height) >= 20000000")
             elif 'High' in criteria: where.append("(mc.width * mc.height) >= 12000000 AND (mc.width * mc.height) < 20000000")
             elif 'Standard' in criteria: where.append("(mc.width * mc.height) >= 2000000 AND (mc.width * mc.height) < 12000000")
             elif 'Low' in criteria: where.append("(mc.width * mc.height) < 2000000")
         elif cat == 'aud':
-            # Bitrate logic
+            where.append("mc.file_type_group = 'AUDIO'")
             if 'High' in criteria: where.append("mc.bitrate >= 256000")
             elif 'Standard' in criteria: where.append("mc.bitrate >= 128000 AND mc.bitrate < 256000")
             elif 'Low' in criteria: where.append("mc.bitrate < 128000")
@@ -763,12 +766,19 @@ def api_files():
     if where: base += " WHERE " + " AND ".join(where)
     
     # Totals
-    total = conn.execute("SELECT COUNT(*) FROM FilePathInstances").fetchone()[0]
-    filtered = conn.execute(f"SELECT COUNT(*) FROM ({base})", params).fetchone()[0]
-    
-    sql = f"{base} {order_clause} LIMIT ? OFFSET ?"
-    params.extend([length, start])
-    rows = conn.execute(sql, params).fetchall()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM FilePathInstances").fetchone()[0]
+        filtered = conn.execute(f"SELECT COUNT(*) FROM ({base})", params).fetchone()[0]
+        
+        sql = f"{base} {order_clause} LIMIT ? OFFSET ?"
+        params.extend([length, start])
+        rows = conn.execute(sql, params).fetchall()
+    except Exception as e:
+        print(f"SQL Error: {e}")
+        rows = []
+        filtered = 0
+        total = 0
+
     conn.close()
     
     data = []
