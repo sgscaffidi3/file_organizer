@@ -16,10 +16,11 @@ _CHANGELOG_ENTRIES = [
     "CONSOLIDATION: Merged all previous features into a single comprehensive report.",
     "UPDATE: Refactored Duplicate Audit to show top 10 largest (with --verbose toggle).",
     "FEATURE: Added Extraction Spot-Check for largest file of each type.",
-    "FIX: Corrected get_top_duplicates query to use COUNT(*) instead of non-existent fpi.id."
+    "FIX: Corrected get_top_duplicates query to use COUNT(*) instead of non-existent fpi.id.",
+    "FIX: Added null-checks for extended_metadata in get_audio_summary to prevent TypeError."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.3.13
+# Version: 0.3.14
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List
@@ -69,7 +70,6 @@ class ReportGenerator:
 
     def get_top_duplicates(self, limit: int = None) -> List[Dict]:
         """Finds duplicate groups, sorted by size descending."""
-        # FIX: Changed COUNT(fpi.id) to COUNT(*) because the 'id' column was missing
         query = """
             SELECT mc.content_hash, mc.size, COUNT(*) as c 
             FROM MediaContent mc
@@ -104,12 +104,17 @@ class ReportGenerator:
         samples = []
         for group, h, size, meta_json in rows:
             path_res = self.db.execute_query("SELECT original_relative_path FROM FilePathInstances WHERE content_hash = ? LIMIT 1", (h,))
+            try:
+                meta_dict = json.loads(meta_json) if meta_json else {}
+            except json.JSONDecodeError:
+                meta_dict = {"Error": "Corrupt JSON in DB"}
+
             samples.append({
                 "group": group,
                 "hash": h,
                 "size": size,
                 "path": path_res[0][0] if path_res else "Unknown",
-                "metadata": json.loads(meta_json)
+                "metadata": meta_dict
             })
         return samples
 
@@ -140,7 +145,13 @@ class ReportGenerator:
         codecs, tiers = {"Unknown": 0}, {"Lossless (>500k)": 0, "High (256-500k)": 0, "Standard (128-256k)": 0, "Low (<128k)": 0, "Unknown": 0}
         rows = self.db.execute_query("SELECT extended_metadata FROM MediaContent WHERE file_type_group = 'AUDIO'")
         for (m_str,) in rows:
-            m = json.loads(m_str)
+            if not m_str: # Check for None or empty string
+                continue
+            try:
+                m = json.loads(m_str)
+            except json.JSONDecodeError:
+                continue
+
             c = m.get('Audio_Codec_List') or m.get('Format') or 'Unknown'
             codecs[c] = codecs.get(c, 0) + 1
             br = m.get('Bit_Rate') or m.get('Overall_Bit_Rate')
@@ -175,7 +186,7 @@ class ReportGenerator:
             if count > 0: print(f"  - Resolution {label:<7}: {count:>4} files")
         v_codecs = self.db.execute_query("SELECT video_codec, COUNT(*) FROM MediaContent WHERE file_type_group='VIDEO' GROUP BY video_codec")
         for c, count in v_codecs:
-            print(f"  - Codec {str(c):<12}: {count:>4} files")
+            if c: print(f"  - Codec {str(c):<12}: {count:>4} files")
 
         print(f"\n[IMAGE ANALYSIS]")
         for label, count in self.get_image_quality().items():
