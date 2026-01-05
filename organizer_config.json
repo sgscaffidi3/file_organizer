@@ -13,5 +13,13 @@
         "VIDEO": [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".3gp", ".webm", ".ts", ".m2ts", ".vob", ".mpg", ".mpeg", ".flv", ".f4v", ".mxf"],
         "AUDIO": [".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".wma", ".aiff", ".m4b", ".opus"],
         "DOCUMENT": [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".epub", ".mobi", ".rtf", ".md"]
+    },
+    "ffmpeg": {
+        "binary_path": null,
+        "video_codec": "libx264",
+        "audio_codec": "aac",
+        "preset": "ultrafast",
+        "crf": "23",
+        "extra_args": []
     }
 }
