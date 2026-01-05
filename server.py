@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 10
+_MINOR_VERSION = 11
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -62,10 +62,11 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Removed -analyzeduration/-probesize flags which were causing startup hangs on large files.",
     "CRITICAL FIX: Set `cwd` in subprocess to FFmpeg binary directory to ensure DLLs are found.",
     "FEATURE: Added `ffprobe` detection and HEVC/H.265 detection to force transcoding for 'Audio Only' MP4s.",
-    "COMPATIBILITY: Added .mpg, .mpeg, and .mpe to mandatory transcoding list."
+    "COMPATIBILITY: Added .mpg, .mpeg, and .mpe to mandatory transcoding list.",
+    "FEATURE: Added /api/map endpoint to serve GPS coordinates from metadata."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.63
+# Version: 0.11.64
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -228,12 +229,10 @@ def needs_transcoding(path_obj):
     ext = path_obj.suffix.lower()
     
     # 1. Always transcode unsupported containers
-    # Added .mpg, .mpeg, .mpe
     if ext in ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts', '.3gp', '.mpg', '.mpeg', '.mpe']:
         return True
     
     # 2. For MP4/MOV, check if it's HEVC (H.265)
-    # Browsers often fail to play HEVC natively
     if ext in ['.mp4', '.mov'] and FFPROBE_BINARY:
         try:
             cmd = [
@@ -248,7 +247,6 @@ def needs_transcoding(path_obj):
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
             codec = result.stdout.strip().lower()
             
-            # If codec is NOT h264 or av1 or vp8/9, we likely need to transcode
             if codec and codec not in ['h264', 'av1', 'vp8', 'vp9']:
                 print(f"[Media] Detected non-web codec '{codec}' in {path_obj.name}. Transcoding enabled.")
                 return True
@@ -352,6 +350,45 @@ def api_quality():
         except: pass
     conn.close()
     return jsonify({'video': res_stats, 'image': img_stats, 'audio': aud_stats})
+
+@app.route('/api/map')
+def api_map():
+    """Returns JSON of files containing GPS metadata."""
+    conn = get_db()
+    # Query for potential GPS candidates first to reduce Python looping
+    query = """
+    SELECT fpi.file_id, mc.extended_metadata, fpi.original_relative_path 
+    FROM MediaContent mc 
+    JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash 
+    WHERE fpi.is_primary = 1 
+      AND mc.file_type_group = 'IMAGE'
+      AND mc.extended_metadata LIKE '%GPS%'
+    """
+    rows = conn.execute(query).fetchall()
+    conn.close()
+    
+    markers = []
+    for r in rows:
+        fid, meta_json, path = r
+        try:
+            if not meta_json: continue
+            meta = json.loads(meta_json)
+            
+            # Check for Standard GPS keys
+            lat = meta.get('GPS_Latitude')
+            lng = meta.get('GPS_Longitude')
+            
+            if lat and lng:
+                markers.append({
+                    "id": fid,
+                    "lat": float(lat),
+                    "lng": float(lng),
+                    "name": Path(path).name
+                })
+        except:
+            continue
+            
+    return jsonify(markers)
 
 @app.route('/api/files')
 def api_files():
