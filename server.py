@@ -128,11 +128,13 @@ HTML_TEMPLATE = """
         #main { flex: 1; display: flex; flex-direction: column; background: var(--bg-dark); min-width: 0; }
         .top-bar { height: var(--header-height); border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: var(--panel); }
         
+        /* Dashboard Stats */
         .stats-row { display: flex; gap: 15px; padding: 15px 20px; background: #181818; border-bottom: 1px solid #333; }
         .stat-card { background: #252525; flex: 1; padding: 10px 15px; border-radius: 6px; border: 1px solid #333; display: flex; flex-direction: column; justify-content: center; }
         .stat-val { font-size: 1.2rem; font-weight: bold; color: #fff; }
         .stat-label { font-size: 0.75rem; color: #888; text-transform: uppercase; }
 
+        /* Advanced Filters */
         .filters-bar { padding: 10px 20px; background: #1a1a1a; border-bottom: 1px solid #333; display: flex; gap: 10px; align-items: center; }
         .form-select-sm, .form-control-sm { background-color: #2b2b2b; border-color: #444; color: #eee; }
         
@@ -158,6 +160,7 @@ HTML_TEMPLATE = """
         .report-table td { color: #ddd; vertical-align: middle; }
         h4.report-title { color: var(--accent); margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
 
+        /* Modal */
         .modal-content { background: #252525; border: 1px solid #444; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         .modal-header { border-bottom: 1px solid #444; }
         .modal-footer { border-top: 1px solid #444; }
@@ -728,6 +731,7 @@ def api_files():
     params = []
     
     if search:
+        # Search includes metadata
         where.append("(NORM_PATH(fpi.original_relative_path) LIKE ? OR mc.file_type_group LIKE ? OR mc.extended_metadata LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     
