@@ -58,10 +58,11 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL FIX: Set subprocess `bufsize=0` to prevent Python from holding video headers, fixing the Gray Screen hanging issue.",
     "DEBUG: Implemented threaded stderr reader to print FFmpeg logs to console in real-time.",
     "FIX: Resolved absolute path for FFmpeg input to prevent 'No such file' errors on nested directories.",
-    "DEBUG: Simplified stderr handling to write directly to sys.stderr for immediate feedback."
+    "DEBUG: Simplified stderr handling to write directly to sys.stderr for immediate feedback.",
+    "PERFORMANCE: Removed -analyzeduration/-probesize flags which were causing startup hangs on large files."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.59
+# Version: 0.10.60
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -72,6 +73,7 @@ import sys
 import io
 import subprocess
 import shutil
+import threading
 from pathlib import Path
 from collections import defaultdict
 from flask import Flask, render_template, request, jsonify, send_file, abort, Response, stream_with_context
@@ -145,10 +147,9 @@ def transcode_video_stream(path_str):
     settings = CONFIG.FFMPEG_SETTINGS
     
     # 2. Build Command
-    cmd = [FFMPEG_BINARY, '-y'] # -y Overwrite (though we use pipe)
+    cmd = [FFMPEG_BINARY, '-y']
     
-    # Input optimizations
-    cmd.extend(['-analyzeduration', '50M', '-probesize', '50M'])
+    # Removed heavy analysis flags to speed up start
     cmd.extend(['-i', str(abs_path)])
     
     # Video
@@ -179,37 +180,35 @@ def transcode_video_stream(path_str):
         '-f', 'mp4',
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 
         '-reset_timestamps', '1',
-        '-g', '30', # Keyframe every 30 frames
+        '-g', '30', 
         'pipe:1'
     ])
     
     print(f"[FFmpeg] Command: {' '.join(cmd)}")
     
     # 3. Execution
-    # We map stderr to sys.stderr so it appears in your console immediately.
-    # We use bufsize=0 to ensure bytes aren't held back.
+    # Simplified subprocess call to reduce Windows pipe locking issues
     proc = subprocess.Popen(
         cmd, 
         stdout=subprocess.PIPE, 
-        stderr=sys.stderr, 
-        bufsize=0
+        stderr=sys.stderr, # Direct to console
+        bufsize=0          # Unbuffered
     )
     
     try:
         # Read in larger chunks (32KB) for efficiency
         while True:
-            # Check if process is dead
-            if proc.poll() is not None:
-                if proc.returncode != 0:
-                    print(f"[FFmpeg] Process exited with error code: {proc.returncode}")
-                break
-                
             data = proc.stdout.read(32768)
             if not data:
                 break
             yield data
+            
+            # Check for early exit
+            if proc.poll() is not None and proc.returncode != 0:
+                print(f"[FFmpeg] Process exited with error: {proc.returncode}")
+                break
+                
     except GeneratorExit:
-        # Client disconnected
         proc.terminate()
     except Exception as e:
         print(f"[FFmpeg] Exception: {e}")
