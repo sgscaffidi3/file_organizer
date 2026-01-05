@@ -26,10 +26,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE UPGRADE: Added router logic to dispatch to specific extractors based on extension.",
     "FEATURE UPGRADE: Added support for RAW images, SVG, and PPTX metadata extraction.",
     "FEATURE UPGRADE: Added 'pillow-heif' registration for .HEIC support.",
-    "DATA INTEGRITY: Updated MediaInfo extractor to return RAW INTEGERS for BitRate, Duration, Width, Height (Fixes sorting/reporting)."
+    "DATA INTEGRITY: Updated MediaInfo extractor to return RAW INTEGERS for BitRate, Duration, Width, Height (Fixes sorting/reporting).",
+    "ROBUSTNESS: Added automatic fallback to MediaInfo for HEIC files if Pillow/pillow-heif fails."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.22
+# Version: 0.5.23
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -275,10 +276,17 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
     # 2. Dispatch Logic
     specialized_meta = {}
     
-    img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif', 
-                '.cr2', '.nef', '.arw', '.dng', '.orf']
-    
-    if ext in img_exts:
+    # HEIC Specific Handling (Attempt Pillow/HEIF first, Fallback to MediaInfo)
+    if ext in ['.heic', '.heif']:
+        specialized_meta = extract_image_metadata(file_path)
+        # If Pillow failed (e.g. library missing or header issue), use MediaInfo
+        if 'Pillow_Error' in specialized_meta:
+            # Drop the pillow error and try MediaInfo
+            specialized_meta = extract_video_metadata(file_path)
+            # Add a flag to indicate source
+            specialized_meta['_Source'] = 'MediaInfo (HEIC Fallback)'
+
+    elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.cr2', '.nef', '.arw', '.dng', '.orf']:
         specialized_meta = extract_image_metadata(file_path)
     
     elif ext == '.svg':
