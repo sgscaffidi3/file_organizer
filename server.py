@@ -44,10 +44,11 @@ _CHANGELOG_ENTRIES = [
     "REFACTOR: Separated HTML template into 'templates/dashboard.html' (Standard Flask MVC).",
     "FEATURE: Added On-the-Fly RAW Image Conversion (NEF/CR2 -> JPEG) via rawpy.",
     "FEATURE: Added .DOCX Text Extraction for browser preview.",
-    "FEATURE: Added On-the-Fly HEIC Image Conversion (HEIC -> JPEG) via Pillow-HEIF."
+    "FEATURE: Added On-the-Fly HEIC Image Conversion (HEIC -> JPEG) via Pillow-HEIF.",
+    "NETWORKING: Changed host to '0.0.0.0' to allow access from other computers on the LAN."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.9.44
+# Version: 0.9.45
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -337,7 +338,6 @@ def serve(id):
         ext = path.suffix.lower()
         
         # TRANSCODING: RAW & HEIC -> JPEG
-        # We handle RAWs and HEICs similarly (Open -> Convert -> Serve as JPEG)
         transcode_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif']
         
         if ext in transcode_exts:
@@ -351,7 +351,7 @@ def serve(id):
                     return send_file(img_io, mimetype='image/jpeg')
                 except Exception as e:
                     print(f"Transcode Error: {e}")
-                    # Fallback to sending original (browser may download)
+                    # Fallback
                     return send_file(row[0])
         
         mime, _ = mimetypes.guess_type(row[0])
@@ -445,7 +445,8 @@ def run_server(config_manager):
         return
     print(f"Starting Dashboard on http://127.0.0.1:5000")
     print(f"Database: {DB_PATH}")
-    app.run(port=5000, debug=False)
+    # HOST 0.0.0.0 is the magic key for LAN access
+    app.run(host='0.0.0.0', port=5000, debug=False)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Media Organizer Web Server")
