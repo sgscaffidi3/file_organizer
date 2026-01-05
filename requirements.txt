@@ -8,6 +8,7 @@ tqdm
 
 # Metadata Extraction
 Pillow
+pillow-heif  # New: HEIC Support
 pymediainfo>=6.1.0
 hachoir
 
