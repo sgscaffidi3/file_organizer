@@ -66,15 +66,18 @@
         .badge-type { width: 55px; font-size: 0.7rem; }
         .thumb-img { width: 50px; height: 35px; object-fit: cover; border-radius: 3px; background: #000; border: 1px solid #444; cursor: zoom-in; }
 
+        /* Views */
         .view-section { display: none; height: 100%; flex-direction: column; }
         .view-section.active { display: flex; }
         
+        /* Report View */
         .report-container { padding: 20px; overflow-y: auto; }
         .report-card { background: var(--panel); border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
         .report-table th { color: #888; border-bottom: 1px solid #444; font-size: 0.9rem; }
         .report-table td { color: #ddd; vertical-align: middle; }
         h4.report-title { color: var(--accent); margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
 
+        /* Modal */
         .modal-content { background: #252525; border: 1px solid #444; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         .modal-header { border-bottom: 1px solid #444; }
         .modal-footer { border-top: 1px solid #444; }
@@ -306,7 +309,7 @@
     }
 
     function renderThumb(id, type) {
-        if (type === 'IMAGE') return `<img src="/api/media/${id}" class="thumb-img" loading="lazy" onclick="openMeta(${id})">`;
+        if (type === 'IMAGE') return `<img src="/api/media/${id}?t=${new Date().getTime()}" class="thumb-img" loading="lazy" onclick="openMeta(${id})">`;
         if (type === 'VIDEO') return `<i class="bi bi-film fs-4 text-muted"></i>`;
         if (type === 'AUDIO') return `<i class="bi bi-music-note fs-4 text-muted"></i>`;
         return `<i class="bi bi-file-earmark fs-4 text-muted"></i>`;
@@ -448,7 +451,7 @@
             
             // PREVIEW
             let preview = '<div class="text-muted">No Preview</div>';
-            let src = `/api/media/${id}`;
+            let src = `/api/media/${id}?t=${new Date().getTime()}`; // Cache bust
             let ext = d.name.split('.').pop().toLowerCase();
             let txtExts = ['txt', 'md', 'csv', 'json', 'xml', 'log', 'py', 'js', 'html', 'css', 'sh', 'bat', 'ini', 'rtf'];
             
@@ -460,21 +463,12 @@
                 preview = `<audio controls src="${src}"></audio>`;
             } else if (ext === 'pdf') {
                 preview = `<embed src="${src}" type="application/pdf" style="width:100%; height:100%; min-height:500px;" />`;
-            } else if (ext === 'docx') {
-                 // Fetch content for DOCX specifically (handled by /api/content/ID)
-                 $.get(`/api/content/${id}`, function(txt) {
-                    $('#modal-preview').html(`<div class="p-3 bg-white text-dark" style="overflow:auto; max-height:100%; width:100%; white-space:pre-wrap; border-radius:4px;">${escapeHtml(txt)}</div>`);
-                }).fail(function() {
-                    $('#modal-preview').html('<div class="text-danger p-3">Could not read DOCX content.</div>');
-                });
-                new bootstrap.Modal('#metaModal').show();
-                return;
-            } else if (txtExts.includes(ext)) {
-                // Text Preview
+            } else if (txtExts.includes(ext) || ext === 'docx') {
+                // Text/Doc Preview
                 $.get(`/api/content/${id}`, function(txt) {
-                    $('#modal-preview').html(`<pre class="p-3 text-light" style="overflow:auto; max-height:100%; width:100%; white-space:pre-wrap;">${escapeHtml(txt)}</pre>`);
+                    $('#modal-preview').html(`<div class="p-3 bg-dark text-light border border-secondary rounded" style="overflow:auto; max-height:100%; width:100%; white-space:pre-wrap;">${escapeHtml(txt)}</div>`);
                 }).fail(function() {
-                    $('#modal-preview').html('<div class="text-danger p-3">Could not load text content</div>');
+                    $('#modal-preview').html('<div class="text-danger p-3">Could not load content.</div>');
                 });
                 new bootstrap.Modal('#metaModal').show();
                 return;
