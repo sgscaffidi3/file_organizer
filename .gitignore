@@ -8,6 +8,8 @@ __pycache__/
 *organized_media_output*
 *test_output_coverage*
 test_run.log.txt
+debug_output.mp4
+project_bundle.txt
 
 # C extensions
 *.so
