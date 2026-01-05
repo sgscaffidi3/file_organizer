@@ -10,6 +10,11 @@
     <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+
     <style>
         :root { --sidebar-width: 320px; --header-height: 55px; --bg-dark: #121212; --panel: #1e1e1e; --accent: #0d6efd; }
         body { font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; overflow: hidden; background-color: var(--bg-dark); }
@@ -77,6 +82,9 @@
         .report-table td { color: #ddd; vertical-align: middle; }
         h4.report-title { color: var(--accent); margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
 
+        /* Map View */
+        #map-container { flex: 1; background: #222; }
+        
         /* Modal */
         .modal-content { background: #252525; border: 1px solid #444; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         .modal-header { border-bottom: 1px solid #444; }
@@ -142,6 +150,7 @@
             <div class="d-flex align-items-center gap-3">
                 <div class="btn-group">
                     <button class="btn btn-sm btn-outline-secondary active" onclick="switchMainView('table', this)"><i class="bi bi-table"></i> Data</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="switchMainView('map', this)"><i class="bi bi-map"></i> Map</button>
                     <button class="btn btn-sm btn-outline-secondary" onclick="switchMainView('report', this)"><i class="bi bi-bar-chart-line"></i> Report</button>
                 </div>
                 <span class="text-muted border-start ps-3" id="view-label">All Files</span>
@@ -196,6 +205,11 @@
             </div>
         </div>
 
+        <!-- View: Map -->
+        <div id="view-map" class="view-section">
+            <div id="map-container"></div>
+        </div>
+
         <!-- View: Report -->
         <div id="view-report" class="view-section">
             <div class="report-container" id="report-content">
@@ -240,8 +254,14 @@
 <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
 
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
 <script>
     let table;
+    let map = null;
+    let markers = null;
     let filterState = { type: 'all', val: '' };
 
     $(document).ready(function() {
@@ -423,6 +443,7 @@
         }
         
         if (view === 'report') loadReport();
+        if (view === 'map') initMap();
     }
 
     // --- MODAL ---
@@ -494,6 +515,54 @@
         $('#report-content').html('<div class="text-center mt-5"><div class="spinner-border text-primary"></div></div>');
         $.get('/api/report', function(html) {
             $('#report-content').html(html);
+        });
+    }
+
+    // --- MAP ---
+    function initMap() {
+        if (map) {
+            map.invalidateSize(); // Fix gray box issue
+            return;
+        }
+        
+        map = L.map('map-container').setView([20, 0], 2);
+        
+        // Dark Mode Map Tiles (CartoDB Dark Matter)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap &copy; CARTO',
+            subdomains: 'abcd',
+            maxZoom: 19
+        }).addTo(map);
+        
+        markers = L.markerClusterGroup({
+            showCoverageOnHover: false,
+            maxClusterRadius: 50
+        });
+        map.addLayer(markers);
+        
+        // Fetch Data
+        $.get('/api/map', function(data) {
+            if (data.length === 0) {
+                alert("No GPS data found in image metadata.");
+                return;
+            }
+            
+            data.forEach(p => {
+                let m = L.marker([p.lat, p.lng]);
+                let popupContent = `
+                    <div style="text-align:center">
+                        <img src="/api/media/${p.id}" style="height:100px; width:auto; border-radius:4px; margin-bottom:5px; cursor:pointer" onclick="openMeta(${p.id})"><br>
+                        <strong>${p.name}</strong><br>
+                        <button class="btn btn-sm btn-primary mt-1" onclick="openMeta(${p.id})">Inspect</button>
+                    </div>
+                `;
+                m.bindPopup(popupContent);
+                markers.addLayer(m);
+            });
+            
+            if (data.length > 0) {
+                map.fitBounds(markers.getBounds());
+            }
         });
     }
 </script>
