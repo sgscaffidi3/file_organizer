@@ -244,7 +244,7 @@
                             <div class="p-2">
                                 <label class="form-label text-muted small">User Notes (Saved to Database)</label>
                                 <textarea id="user-notes" class="form-control bg-dark text-light border-secondary" rows="10" placeholder="Add your notes here..."></textarea>
-                                <button class="btn btn-primary w-100 mt-3" onclick="saveNotes()">Save Notes</button>
+                                <button id="btn-save-notes" class="btn btn-primary w-100 mt-3" onclick="saveNotes()">Save Notes</button>
                             </div>
                         </div>
                         <div class="tab-pane fade" id="tab-history">
@@ -272,9 +272,13 @@
     let map = null;
     let markers = null;
     let currentFileId = null;
+    let metaModalInstance = null; // SINGLETON MODAL INSTANCE
     let filterState = { type: 'all', val: '' };
 
     $(document).ready(function() {
+        // Initialize Modal ONCE
+        metaModalInstance = new bootstrap.Modal('#metaModal');
+        
         initStats();
         initTree();
         initTypes();
@@ -456,16 +460,16 @@
         if (view === 'map') initMap();
     }
 
-    // --- MODAL ---
-    function openMeta(id) {
+    // --- MODAL LOGIC (FIXED) ---
+    
+    // Core function to fetch and populate data
+    function loadMetaData(id, callback) {
         currentFileId = id;
         $.get(`/api/details/${id}`, function(d) {
             let meta = {};
             try { meta = JSON.parse(d.metadata); } catch(e) {}
             $('#modal-json').text(JSON.stringify(meta, null, 4));
             $('#modal-download').attr('href', `/api/media/${id}`);
-            
-            // Populate Notes
             $('#user-notes').val(meta.User_Notes || '');
             
             // HISTORY TAB
@@ -486,35 +490,44 @@
             
             // PREVIEW
             let preview = '<div class="text-muted">No Preview</div>';
-            let src = `/api/media/${id}?t=${new Date().getTime()}`; // Cache bust
+            let src = `/api/media/${id}?t=${new Date().getTime()}`;
             let ext = d.name.split('.').pop().toLowerCase();
             let txtExts = ['txt', 'md', 'csv', 'json', 'xml', 'log', 'py', 'js', 'html', 'css', 'sh', 'bat', 'ini', 'rtf'];
             
             if (d.type === 'IMAGE') {
                 preview = `<img src="${src}" style="max-width:100%; max-height:100%; object-fit:contain">`;
             } else if (d.type === 'VIDEO') {
-                // UPDATE: Added type='video/mp4' to help browser identify the stream
                 preview = `<div class="text-center"><video controls autoplay style="max-width:100%"><source src="${src}" type="video/mp4"></video></div>`;
             } else if (d.type === 'AUDIO') {
                 preview = `<audio controls src="${src}"></audio>`;
             } else if (ext === 'pdf') {
                 preview = `<embed src="${src}" type="application/pdf" style="width:100%; height:100%; min-height:500px;" />`;
             } else if (txtExts.includes(ext) || ext === 'docx') {
-                // Text/Doc Preview
                 $.get(`/api/content/${id}`, function(txt) {
                     $('#modal-preview').html(`<div class="p-3 bg-dark text-light border border-secondary rounded" style="overflow:auto; max-height:100%; width:100%; white-space:pre-wrap;">${escapeHtml(txt)}</div>`);
                 }).fail(function() {
                     $('#modal-preview').html('<div class="text-danger p-3">Could not load content.</div>');
                 });
-                new bootstrap.Modal('#metaModal').show();
+                if (callback) callback();
                 return;
             }
             
             $('#modal-preview').html(preview);
-            new bootstrap.Modal('#metaModal').show();
+            if (callback) callback();
+        });
+    }
+
+    // Opens the modal
+    function openMeta(id) {
+        loadMetaData(id, function() {
+            // Reset button text
+            $('#btn-save-notes').text('Save Notes').removeClass('btn-success').addClass('btn-primary');
+            // Show Singleton Instance
+            metaModalInstance.show();
         });
     }
     
+    // Saves notes and refreshes data
     function saveNotes() {
         const notes = $('#user-notes').val();
         if (!currentFileId) return;
@@ -525,9 +538,14 @@
             contentType: 'application/json',
             data: JSON.stringify({ id: currentFileId, notes: notes }),
             success: function(res) {
-                alert('Notes saved successfully!');
-                // Reload meta to refresh JSON view
-                openMeta(currentFileId);
+                // Feedback
+                $('#btn-save-notes').text('Saved!').removeClass('btn-primary').addClass('btn-success');
+                setTimeout(() => {
+                    $('#btn-save-notes').text('Save Notes').removeClass('btn-success').addClass('btn-primary');
+                }, 2000);
+                
+                // Refresh Data Logic (Silent refresh, don't re-open modal)
+                loadMetaData(currentFileId);
             },
             error: function(err) {
                 alert('Failed to save notes.');
