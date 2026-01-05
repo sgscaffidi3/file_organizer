@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 11
+_MINOR_VERSION = 12
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -63,10 +63,12 @@ _CHANGELOG_ENTRIES = [
     "CRITICAL FIX: Set `cwd` in subprocess to FFmpeg binary directory to ensure DLLs are found.",
     "FEATURE: Added `ffprobe` detection and HEVC/H.265 detection to force transcoding for 'Audio Only' MP4s.",
     "COMPATIBILITY: Added .mpg, .mpeg, and .mpe to mandatory transcoding list.",
-    "FEATURE: Added /api/map endpoint to serve GPS coordinates from metadata."
+    "FEATURE: Added /api/map endpoint to serve GPS coordinates from metadata.",
+    "FEATURE: Added /api/update_notes endpoint to write User Notes into JSON metadata.",
+    "FEATURE: Added /api/export_db endpoint to download the SQLite database."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.11.64
+# Version: 0.12.66
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -355,7 +357,6 @@ def api_quality():
 def api_map():
     """Returns JSON of files containing GPS metadata."""
     conn = get_db()
-    # Query for potential GPS candidates first to reduce Python looping
     query = """
     SELECT fpi.file_id, mc.extended_metadata, fpi.original_relative_path 
     FROM MediaContent mc 
@@ -373,11 +374,8 @@ def api_map():
         try:
             if not meta_json: continue
             meta = json.loads(meta_json)
-            
-            # Check for Standard GPS keys
             lat = meta.get('GPS_Latitude')
             lng = meta.get('GPS_Longitude')
-            
             if lat and lng:
                 markers.append({
                     "id": fid,
@@ -385,10 +383,52 @@ def api_map():
                     "lng": float(lng),
                     "name": Path(path).name
                 })
-        except:
-            continue
-            
+        except: continue
     return jsonify(markers)
+
+@app.route('/api/update_notes', methods=['POST'])
+def api_update_notes():
+    """Updates the 'User_Notes' field in the extended_metadata JSON blob."""
+    data = request.json
+    file_id = data.get('id')
+    notes = data.get('notes', '')
+    
+    conn = get_db()
+    try:
+        # 1. Get Content Hash and Current Metadata
+        row = conn.execute("SELECT mc.content_hash, mc.extended_metadata FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash = mc.content_hash WHERE fpi.file_id = ?", (file_id,)).fetchone()
+        
+        if not row:
+            return jsonify({"success": False, "error": "File ID not found"}), 404
+            
+        c_hash, meta_str = row
+        try:
+            meta = json.loads(meta_str) if meta_str else {}
+        except:
+            meta = {}
+            
+        # 2. Update Metadata
+        meta['User_Notes'] = notes
+        new_meta_str = json.dumps(meta, indent=4)
+        
+        # 3. Write Back
+        conn.execute("UPDATE MediaContent SET extended_metadata = ? WHERE content_hash = ?", (new_meta_str, c_hash))
+        conn.commit()
+        
+        return jsonify({"success": True})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/export_db')
+def api_export_db():
+    """Downloads the current database file."""
+    if os.path.exists(DB_PATH):
+        return send_file(DB_PATH, as_attachment=True)
+    abort(404)
 
 @app.route('/api/files')
 def api_files():
