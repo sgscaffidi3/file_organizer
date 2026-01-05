@@ -41,7 +41,6 @@ _CHANGELOG_ENTRIES = [
     "UX: Added browser compatibility warning for non-web video formats (MKV, AVI).",
     "PERFORMANCE: Replaced slow Python NORM_PATH function with native SQLite REPLACE() for massive speedup.",
     "FIX: Ensured metadata API returns valid JSON string '{}' even if DB is NULL to prevent JS display errors.",
-    "FIX: Restored 'NORM_PATH' SQL function registration to fix 'no such function' errors in tree/type/report queries.",
     "REFACTOR: Separated HTML template into 'templates/dashboard.html' (Standard Flask MVC)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
@@ -355,11 +354,11 @@ def api_report():
 
     # 3. Video Quality
     res_data = conn.execute("SELECT height FROM MediaContent WHERE file_type_group='VIDEO'").fetchall()
-    res_stats = {'4K+':0, '1080p':0, '720p':0, 'SD':0, 'Unknown':0}
+    res_stats = {'4K+':0, '1080p':0, '720p':0, 'SD':0}
     for r in res_data:
         h = r[0]
-        if not h: res_stats['Unknown'] += 1
-        elif h >= 2160: res_stats['4K+'] += 1
+        if not h: continue
+        if h >= 2160: res_stats['4K+'] += 1
         elif h >= 1080: res_stats['1080p'] += 1
         elif h >= 720: res_stats['720p'] += 1
         else: res_stats['SD'] += 1
@@ -371,11 +370,9 @@ def api_report():
 
     # 4. Image Quality
     img_data = conn.execute("SELECT width, height FROM MediaContent WHERE file_type_group='IMAGE'").fetchall()
-    img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0, 'Unknown':0}
+    img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
-        if not w or not h:
-            img_stats['Unknown'] += 1
-            continue
+        if not w or not h: continue
         mp = (w * h) / 1_000_000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
@@ -389,25 +386,18 @@ def api_report():
 
     # 5. Audio Quality
     aud_data = conn.execute("SELECT bitrate FROM MediaContent WHERE file_type_group='AUDIO'").fetchall()
-    aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0, 'Unknown':0}
+    aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0}
     for r in aud_data:
         try:
             val = str(r[0]).lower()
-            if not val or val == 'none':
-                aud_stats['Unknown'] += 1
-                continue
+            if not val or val == 'none': continue
             val = val.replace('bps','').replace('kb/s','000').replace('k','000').strip()
             b = int(float(val))
             if b >= 256000: aud_stats['High (>256k)'] += 1
             elif b >= 128000: aud_stats['Standard (128k+)'] += 1
             else: aud_stats['Low (<128k)'] += 1
-        except: aud_stats['Unknown'] += 1
-
-    aud_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Quality</th><th>Count</th></tr></thead><tbody>'
-    for k, v in aud_stats.items():
-        if v > 0: aud_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
-    aud_html += '</tbody></table>'
-
+        except: pass
+        
     conn.close()
     
     full_html = f"""
@@ -424,6 +414,7 @@ def api_report():
 def run_server(config_manager):
     global DB_PATH, CONFIG
     CONFIG = config_manager
+    # DB_PATH might have been set externally by main.py
     if DB_PATH is None:
         DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
         
@@ -445,4 +436,6 @@ if __name__ == '__main__':
         print_version_info(__file__, "Web Server")
         sys.exit(0)
     
+    # Normal execution (usually called via main.py)
+    # If run directly without main.py, it needs a config:
     run_server(ConfigManager())
