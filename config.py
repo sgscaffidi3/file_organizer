@@ -18,6 +18,7 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Re-enabled 1MB BLOCK_SIZE for production speed."
 ]
 # ------------------------------------------------------------------------------
+import os
 from pathlib import Path
 import argparse
 import sys
@@ -27,6 +28,10 @@ from config_manager import ConfigManager
 # --- Execution Settings ---
 DRY_RUN_MODE = True           # If True, no files are copied/moved/deleted (N03).
 BLOCK_SIZE = 1048576          # Chunk size for incremental hashing (1MB) - Optimized for Video.
+# Threading (Default to CPU Count, cap at 32 to prevent UI chaos)
+
+# Reduce this to 1 or 4 if using a mechanical Hard Drive to prevent thrashing.
+HASHING_THREADS = min(os.cpu_count() or 4, 32) 
 
 # --- Path Definitions ---
 # The location of the SQLite database file. This is derived from the OUTPUT_DIR
