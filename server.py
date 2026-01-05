@@ -50,10 +50,11 @@ _CHANGELOG_ENTRIES = [
     "DEBUG: Added console logging for RAW conversion attempts.",
     "FEATURE: Added On-the-Fly Video Transcoding (MKV/AVI/WMV -> MP4) using FFmpeg streaming.",
     "FEATURE: Configurable FFmpeg binary path and arguments via organizer_config.json.",
-    "FIX: Enforced '-pix_fmt yuv420p' and '-ac 2' in FFmpeg to ensure browser compatibility."
+    "FIX: Enforced '-pix_fmt yuv420p' and '-ac 2' in FFmpeg to ensure browser compatibility.",
+    "FIX: Added robust path detection for FFmpeg to handle Folder paths vs Binary paths (fixes WinError 5)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.51
+# Version: 0.10.52
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -535,8 +536,32 @@ def run_server(config_manager):
     
     # DETERMINE FFMPEG PATH
     cfg = CONFIG.FFMPEG_SETTINGS
-    if cfg.get('binary_path'):
-        FFMPEG_BINARY = cfg.get('binary_path')
+    candidate_path = cfg.get('binary_path')
+    
+    if candidate_path:
+        path_obj = Path(candidate_path)
+        if path_obj.is_dir():
+            # Try to find ffmpeg inside
+            if os.name == 'nt':
+                potential = path_obj / 'ffmpeg.exe'
+            else:
+                potential = path_obj / 'ffmpeg'
+                
+            if potential.exists() and potential.is_file():
+                FFMPEG_BINARY = str(potential)
+            else:
+                # Maybe it's in a bin subfolder?
+                potential_bin = path_obj / 'bin' / ('ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+                if potential_bin.exists():
+                    FFMPEG_BINARY = str(potential_bin)
+                else:
+                    print(f"⚠️ Configured FFmpeg path is a directory and executable not found: {candidate_path}")
+                    FFMPEG_BINARY = None
+        elif path_obj.exists() and path_obj.is_file():
+             FFMPEG_BINARY = str(path_obj)
+        else:
+             print(f"⚠️ Configured FFmpeg path does not exist: {candidate_path}")
+             FFMPEG_BINARY = None
     else:
         FFMPEG_BINARY = shutil.which('ffmpeg')
         
