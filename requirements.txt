@@ -8,17 +8,19 @@ tqdm
 
 # Metadata Extraction
 Pillow
-pillow-heif  # New: HEIC Support
+pillow-heif
 pymediainfo>=6.1.0
 hachoir
 
-# Documents & Archives (New Support)
+# RAW Image Processing (New)
+rawpy
+
+# Documents & Archives
 PyPDF2
 python-docx
 python-pptx
 openpyxl
 EbookLib
-# Note: zipfile and tarfile are standard python libs
 
-# Web Interface (New)
+# Web Interface
 Flask
