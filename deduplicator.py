@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: deduplicator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Deduplicator class, handling primary copy selection (F06) and path calculation (F05).",
     "Updated _select_primary_copy to return a tuple (path, file_id) to support final path naming.",
@@ -13,18 +13,18 @@ _CHANGELOG_ENTRIES = [
     "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
     "CRITICAL FIX: Updated `_calculate_final_path` signature to match the requirements of `test_deduplicator.py` (`ext` and `primary_file_id`).",
     "UX: Added TQDM progress bar for deduplication feedback.",
-    "PERFORMANCE: Rewrote Deduplicator to use Batch Processing (Vectorization) instead of iterative DB calls. Speed improvement ~100x."
+    "PERFORMANCE: Rewrote Deduplicator to use Batch Processing (Vectorization) instead of iterative DB calls. Speed improvement ~100x.",
+    "FEATURE: Added support for 'rename_on_copy' config. If False, preserves original filename unless collision occurs."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.11
+# Version: 0.6.12
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Set
 import os
 import argparse
 import datetime
-import sqlite3
-import sys
+import re
 from tqdm import tqdm
 
 import config
@@ -42,15 +42,21 @@ class Deduplicator:
         self.config = config_manager
         self.processed_count = 0
         self.duplicates_found = 0
+        # Track generated paths to ensure uniqueness within the output directory
+        self.assigned_paths: Set[str] = set()
+
+    def _sanitize_filename(self, name: str) -> str:
+        """Removes invalid characters for standard file systems."""
+        # Replace / \ : * ? " < > | with underscore
+        return re.sub(r'[<>:"/\\|?*]', '_', name)
 
     def _calculate_final_path(self, primary_path: str, content_hash: str, ext: str, primary_file_id: int, date_best_str: str) -> str:
         """
-        Calculates the final, organized path based on the primary copy's date and hash.
-        Format: OUTPUT_DIR/YEAR/MONTH/HASH_FILEID.EXT
+        Calculates the final, organized path.
+        Respects 'rename_on_copy' setting from config.
         """
         try:
             if date_best_str:
-                # Simple parser for YYYY-MM-DD
                 date_obj = datetime.datetime.strptime(date_best_str.split()[0], '%Y-%m-%d')
             else:
                 date_obj = datetime.datetime.now()
@@ -59,25 +65,49 @@ class Deduplicator:
             
         year = date_obj.strftime('%Y')
         month = date_obj.strftime('%m')
-        hash_prefix = content_hash[:12]
-        filename = f"{hash_prefix}_{primary_file_id}{ext}"
         
+        # Check Configuration
+        rename_enabled = self.config.ORGANIZATION_PREFS.get('rename_on_copy', True)
+        
+        if rename_enabled:
+            # Hash-based naming (Guaranteed unique, but ugly)
+            hash_prefix = content_hash[:12]
+            filename = f"{hash_prefix}_{primary_file_id}{ext}"
+        else:
+            # Human-readable naming (Original Filename)
+            original_name = Path(primary_path).stem
+            safe_name = self._sanitize_filename(original_name)
+            filename = f"{safe_name}{ext}"
+            
+            # Collision Check:
+            # If 2024/01/Photo.jpg exists (assigned to a different hash), we must rename.
+            # We check our internal set of assigned_paths for this run.
+            # Note: We track relative paths to avoid OS separator confusion in set
+            rel_check = f"{year}/{month}/{filename}"
+            
+            if rel_check in self.assigned_paths:
+                # Collision detected! Fallback to appending ID
+                filename = f"{safe_name}_{primary_file_id}{ext}"
+
+        # Construct final path
         relative_path = Path(year) / month / filename
         final_path = self.config.OUTPUT_DIR / relative_path
+        
+        # Register path as used
+        # Store as string with forward slashes for consistency in the set
+        self.assigned_paths.add(f"{year}/{month}/{filename}")
+        
         return str(final_path)
 
     def run_deduplication(self):
         """
         High-performance deduplication using sorting and batch updates.
-        Eliminates the N+1 query problem.
         """
-        # 1. Reset all 'is_primary' flags to 0 to ensure clean slate
         print("Resetting previous deduplication state...")
         self.db.execute_query("UPDATE FilePathInstances SET is_primary = 0;")
         
-        # 2. Fetch ALL instances sorted by the preference logic
-        # Sort Order: Hash -> Date Modified (Oldest) -> Length (Shortest) -> ID (Smallest)
         print("Fetching all file instances (this may take a moment)...")
+        # Added fpi.path to query for filename extraction
         query = """
         SELECT 
             fpi.content_hash, 
@@ -94,15 +124,12 @@ class Deduplicator:
         """
         all_rows = self.db.execute_query(query)
         
-        # 3. Process in Memory
         print(f"Processing {len(all_rows)} instances...")
         
         seen_hashes: Set[str] = set()
+        self.assigned_paths.clear()
         
-        # Buffers for bulk updates
-        # List of (file_id,)
         primary_id_updates: List[Tuple[int]] = []
-        # List of (new_path, content_hash)
         media_content_updates: List[Tuple[str, str]] = []
         
         self.duplicates_found = 0
@@ -113,10 +140,6 @@ class Deduplicator:
                 pbar.update(1)
                 
                 if content_hash not in seen_hashes:
-                    # --- NEW HASH FOUND ---
-                    # Because of the ORDER BY in SQL, the first time we see a hash, 
-                    # it IS the best copy (Oldest date, Shortest path).
-                    
                     seen_hashes.add(content_hash)
                     
                     # 1. Mark as Primary
@@ -125,26 +148,20 @@ class Deduplicator:
                     # 2. Calculate Destination Path
                     ext = Path(path_str).suffix
                     final_path = self._calculate_final_path(path_str, content_hash, ext, file_id, date_best)
-                    media_content_updates.append((final_path, content_hash))
                     
+                    media_content_updates.append((final_path, content_hash))
                     self.processed_count += 1
                 else:
-                    # --- DUPLICATE FOUND ---
-                    # We've already seen this hash, so this row is a duplicate.
-                    # We do nothing, as is_primary was reset to 0 at the start.
                     self.duplicates_found += 1
 
-        # 4. Commit Batch Updates
         print("Committing updates to database...")
         
-        # Update is_primary flags
         if primary_id_updates:
             self.db.execute_many(
                 "UPDATE FilePathInstances SET is_primary = 1 WHERE file_id = ?;", 
                 primary_id_updates
             )
             
-        # Update new_path_id in MediaContent
         if media_content_updates:
             self.db.execute_many(
                 "UPDATE MediaContent SET new_path_id = ? WHERE content_hash = ?;",
