@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: migrator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 7
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Migrator class, handling file copy operations (F07) and adhering to DRY_RUN_MODE (N03).",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
@@ -9,17 +9,20 @@ _CHANGELOG_ENTRIES = [
     "UX: Added TQDM progress bar for migration feedback.",
     "PERFORMANCE: Replaced N+1 query loop with a single SQL JOIN to instantly load migration jobs.",
     "FEATURE: Implemented 'Clean Database Export'. Creates a new SQLite DB reflecting the organized structure.",
-    "LOGIC: Added automatic 'clean_index.sqlite' generation during Live Run."
+    "LOGIC: Added automatic 'clean_index.sqlite' generation during Live Run.",
+    "FEATURE: Inject 'Original_Filename' and 'Source_Copies' list into extended_metadata for Clean DB export."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.6.7
+# Version: 0.7.8
 # ------------------------------------------------------------------------------
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import os
 import shutil
 import argparse
 import sqlite3
+import json
+from collections import defaultdict
 from tqdm import tqdm
 
 import config
@@ -31,7 +34,8 @@ class Migrator:
     """
     Manages the physical file migration process (F07).
     Copies the primary copy of each unique file to its final calculated destination.
-    Also generates a new 'Clean' database reflecting the organized structure.
+    Also generates a new 'Clean' database reflecting the organized structure,
+    preserving history (original names/paths) in the metadata.
     """
 
     def __init__(self, db_manager: DatabaseManager, config_manager: ConfigManager):
@@ -48,11 +52,9 @@ class Migrator:
     def _get_migration_jobs(self) -> List[Tuple]:
         """
         Retrieves all files ready for migration.
-        Returns: [(content_hash, primary_full_path, new_path_id, file_type_group, size, date_best, extended_metadata), ...]
+        Returns: [(content_hash, primary_full_path, new_path_id, ...), ...]
         """
         print("Fetching migration list from database...")
-        
-        # We fetch ALL metadata needed to populate the new Clean DB
         query = """
         SELECT 
             mc.content_hash, 
@@ -72,6 +74,20 @@ class Migrator:
           AND fpi.is_primary = 1;
         """
         return self.db.execute_query(query)
+
+    def _build_path_history_map(self) -> Dict[str, List[str]]:
+        """
+        Creates a dictionary mapping content_hash -> [list of all original paths].
+        Used to preserve the history of duplicates in the clean DB.
+        """
+        print("Building path history map...")
+        query = "SELECT content_hash, original_full_path FROM FilePathInstances"
+        rows = self.db.execute_query(query)
+        
+        history_map = defaultdict(list)
+        for h, p in rows:
+            history_map[h].append(p)
+        return history_map
     
     def _initialize_clean_db(self):
         """Creates the schema for the new Clean Index database."""
@@ -104,6 +120,11 @@ class Migrator:
         if not self.dry_run:
             print(f" Export DB: {self.clean_db_path}")
         print("-" * 60)
+
+        # Pre-fetch duplicates history only if we are actually exporting
+        path_history = {}
+        if not self.dry_run:
+            path_history = self._build_path_history_map()
 
         # Buffer for new DB records
         new_content_records = []
@@ -138,14 +159,11 @@ class Migrator:
                     continue
                 
                 if final_dest_path.exists():
-                    # In a real run, we might checksum to verify, but for now we skip to be safe
-                    # tqdm.write(f"SKIP: Destination exists: {final_dest_path.name}")
                     self.files_skipped += 1
-                    # We still add it to the DB records though, assuming it's valid!
+                    # Skip COPY, but proceed to DB record creation so the DB is complete
                 else:
                     # 2. Physical Copy
                     if self.dry_run:
-                        # tqdm.write(f"[DRY] {source_path.name} -> {final_dest_path}")
                         self.files_copied += 1
                     else:
                         try:
@@ -157,9 +175,21 @@ class Migrator:
 
                 # 3. Prepare Clean DB Records (Live Only)
                 if not self.dry_run:
+                    # Enrich Metadata with History
+                    try:
+                        meta_dict = json.loads(f_meta) if f_meta else {}
+                    except:
+                        meta_dict = {}
+                    
+                    # INJECT HISTORY
+                    meta_dict['Original_Filename'] = source_path.name
+                    meta_dict['Source_Copies'] = path_history.get(c_hash, [])
+                    
+                    enriched_meta_json = json.dumps(meta_dict)
+
                     # MediaContent Record
                     new_content_records.append((
-                        c_hash, f_size, f_group, f_date, f_w, f_h, f_dur, f_bit, f_meta, str(final_dest_path)
+                        c_hash, f_size, f_group, f_date, f_w, f_h, f_dur, f_bit, enriched_meta_json, str(final_dest_path)
                     ))
                     
                     # FilePathInstance Record (Pointing to the NEW location)
