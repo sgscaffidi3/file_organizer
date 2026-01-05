@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: main.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
     "Initial implementation.",
     "Integrated all pipeline components (scanner, processor, deduplicator, migrator).",
@@ -12,10 +12,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Integrated FileScanner, MetadataProcessor, Deduplicator, Migrator, and Generators.",
     "CLI: Added flags for --scan, --meta, --dedupe, --migrate, --report, and --all.",
     "SAFETY: Added Database existence checks before running dependent stages.",
-    "FEATURE: Added --serve flag to launch the Flask Web Dashboard."
+    "FEATURE: Added --serve flag to launch the Flask Web Dashboard.",
+    "CLI: Added --db flag to override database path (useful for viewing clean_index.sqlite)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.10
+# Version: 0.6.11
 # ------------------------------------------------------------------------------
 import sys
 import argparse
@@ -23,7 +24,6 @@ import time
 from pathlib import Path
 
 # --- Project Dependencies ---
-# Ensure project root is in path
 project_root = Path(__file__).resolve().parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
@@ -48,9 +48,12 @@ class PipelineOrchestrator:
     """
     Coordinates the execution of the File Organizer pipeline stages.
     """
-    def __init__(self):
+    def __init__(self, db_override=None):
         self.config_mgr = ConfigManager()
-        self.db_path = self.config_mgr.OUTPUT_DIR / 'metadata.sqlite'
+        if db_override:
+            self.db_path = Path(db_override)
+        else:
+            self.db_path = self.config_mgr.OUTPUT_DIR / 'metadata.sqlite'
         
     def _print_header(self, title: str):
         print("\n" + "="*60)
@@ -60,7 +63,6 @@ class PipelineOrchestrator:
     def verify_db_exists(self) -> bool:
         if not self.db_path.exists():
             print(f"ERROR: Database not found at {self.db_path}")
-            print("       Please run with --scan to initialize the database.")
             return False
         return True
 
@@ -90,7 +92,7 @@ class PipelineOrchestrator:
             deduper.run_deduplication()
 
     def run_migrate(self):
-        self._print_header("Stage 4: Migration (Copy)")
+        self._print_header("Stage 4: Migration (Copy & Export)")
         if not self.verify_db_exists(): return
 
         mode_str = "DRY RUN (Simulation)" if config.DRY_RUN_MODE else "LIVE RUN (Real Copy)"
@@ -110,10 +112,29 @@ class PipelineOrchestrator:
             
     def run_server(self):
         self._print_header("Web Interface")
-        run_server(self.config_mgr)
+        # Temporarily override config output dir if looking at a custom DB
+        # This hack ensures the server looks at the right DB file
+        
+        # We actually need to pass the specific DB path to the server runner
+        # But server.py currently assumes Config.OUTPUT_DIR / metadata.sqlite
+        # So we must modify ConfigManager instance or Server logic.
+        # EASIEST: Just monkey-patch the config manager instance for this run.
+        
+        # Point the config's output directory to the PARENT of the provided DB file
+        # effectively making the provided DB the 'metadata.sqlite' of that context?
+        # No, that's messy.
+        
+        # Better: Update server.py to accept an explicit DB path (Already done in previous steps? Let's check)
+        # server.py's run_server accepts `config_manager`.
+        # We need to tell server.py to use `self.db_path`.
+        
+        # UPDATE: I will modify server.py slightly to accept db_path override in run_server
+        # For now, I will modify the global variable in server via the import.
+        import server
+        server.DB_PATH = self.db_path
+        server.run_server(self.config_mgr)
 
     def run_all(self):
-        """Executes the full pipeline in order."""
         start_time = time.time()
         print(f"Starting Full Pipeline Run on: {self.config_mgr.SOURCE_DIR}")
         
@@ -132,15 +153,16 @@ if __name__ == '__main__':
     
     # Mode Flags
     parser.add_argument('--scan', action='store_true', help="Step 1: Scan source directory and hash files.")
-    parser.add_argument('--meta', action='store_true', help="Step 2: Extract rich metadata (EXIF, PDF info, etc).")
-    parser.add_argument('--dedupe', action='store_true', help="Step 3: Identify duplicates and calculate final paths.")
-    parser.add_argument('--migrate', action='store_true', help="Step 4: Copy files to output (Subject to DRY_RUN_MODE).")
+    parser.add_argument('--meta', action='store_true', help="Step 2: Extract rich metadata.")
+    parser.add_argument('--dedupe', action='store_true', help="Step 3: Identify duplicates.")
+    parser.add_argument('--migrate', action='store_true', help="Step 4: Copy files and Export Clean DB.")
     parser.add_argument('--report', action='store_true', help="Step 5: Generate Console report.")
-    parser.add_argument('--serve', action='store_true', help="Step 6: Launch Web Dashboard (Flask).")
-    parser.add_argument('--all', action='store_true', help="Run the FULL pipeline (Steps 1-5).")
+    parser.add_argument('--serve', action='store_true', help="Step 6: Launch Web Dashboard.")
+    parser.add_argument('--all', action='store_true', help="Run the FULL pipeline.")
     
-    # Info Flags
-    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    # Options
+    parser.add_argument('--db', type=str, help="Override database path (e.g. for viewing export).")
+    parser.add_argument('-v', '--version', action='store_true', help='Show version info.')
     
     args = parser.parse_args()
 
@@ -148,7 +170,8 @@ if __name__ == '__main__':
         print_version_info(__file__, "Main Pipeline Orchestrator")
         sys.exit(0)
 
-    orchestrator = PipelineOrchestrator()
+    # Initialize with DB Override if provided
+    orchestrator = PipelineOrchestrator(db_override=args.db)
     
     if not any([args.scan, args.meta, args.dedupe, args.migrate, args.report, args.all, args.serve]):
         parser.print_help()
