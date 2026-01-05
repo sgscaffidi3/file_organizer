@@ -19,10 +19,12 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Implemented RAM Cache for _check_if_known_and_unchanged to enable Fast Resume.",
     "UX: Re-implemented Nested Byte-Level Progress Bar for large file visibility.",
     "PERFORMANCE: Implemented Multithreaded Hashing using ThreadPoolExecutor (producer-consumer model).",
-    "UX: Implemented Position Pool to allow multiple progress bars (one per thread) simultaneously."
+    "UX: Implemented Position Pool to allow multiple progress bars (one per thread) simultaneously.",
+    "PERFORMANCE: Added 'Smart UI Threshold'. Only files > 50MB get a dedicated progress bar to prevent UI lag on small files.",
+    "PERFORMANCE: Implemented Batch Database Commits (1000 records/batch) to eliminate disk IO latency."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.7.17
+# Version: 0.7.20
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, List, Tuple, Set
@@ -49,11 +51,16 @@ DEFAULT_FILE_GROUPS: Dict[str, List[str]] = {
     'OTHER': []
 }
 
+# Only show a nested progress bar if file is larger than 50 MB
+UI_THRESHOLD_BYTES = 50 * 1024 * 1024
+# Commit to DB every N files
+DB_BATCH_SIZE = 1000
+
 class FileScanner:
     """
     Traverses a source directory, generates SHA256 hashes for media content,
     and inserts records into the database.
-    Uses Multithreading with visual feedback for each thread.
+    Uses Multithreading with visual feedback and Batch Writes.
     """
     def __init__(self, db: DatabaseManager, source_dir: Path, file_groups: Dict[str, List[str]]):
         self.db = db
@@ -92,37 +99,46 @@ class FileScanner:
     def _calculate_sha256_worker(self, args):
         """
         Worker function to hash a file.
-        Acquires a UI slot (position) to draw its own progress bar.
+        Only uses a progress bar if the file is large.
         """
         file_path, file_size = args
         hasher = hashlib.sha256()
         
-        # Acquire a visual slot (Block until one is available, though thread pool limits active count anyway)
-        position = self.position_pool.get()
+        # Smart UI: Only grab a slot/bar if file is large
+        use_bar = file_size >= UI_THRESHOLD_BYTES
+        position = None
+        
+        if use_bar:
+            position = self.position_pool.get()
         
         try:
-            with tqdm(
-                total=file_size, 
-                unit='B', 
-                unit_scale=True, 
-                unit_divisor=1024, 
-                desc=f"T{position}: {file_path.name[:15]}", 
-                position=position, 
-                leave=False # Clear bar when done to reuse slot cleanly
-            ) as pbar:
+            if use_bar:
+                with tqdm(
+                    total=file_size, 
+                    unit='B', 
+                    unit_scale=True, 
+                    unit_divisor=1024, 
+                    desc=f"T{position}: {file_path.name[:15]}", 
+                    position=position, 
+                    leave=False
+                ) as pbar:
+                    with open(file_path, 'rb') as f:
+                        while chunk := f.read(config.BLOCK_SIZE):
+                            hasher.update(chunk)
+                            pbar.update(len(chunk))
+            else:
+                # Fast path for small files (no UI overhead)
                 with open(file_path, 'rb') as f:
                     while chunk := f.read(config.BLOCK_SIZE):
                         hasher.update(chunk)
-                        pbar.update(len(chunk))
+                        
             return hasher.hexdigest()
             
         except Exception as e:
-            # Move cursor to bottom to print error safely
-            # tqdm.write(f"Error reading file {file_path}: {e}") 
             return None
         finally:
-            # Return the slot to the pool
-            self.position_pool.put(position)
+            if position:
+                self.position_pool.put(position)
 
     def _check_if_known_and_unchanged(self, file_path: Path, file_stat: os.stat_result) -> bool:
         path_str = str(file_path)
@@ -145,13 +161,12 @@ class FileScanner:
         print("Analyzing directory structure...")
         files_to_process = []
         
-        # 1. Walk and Filter (Main Thread)
+        # 1. Walk and Filter
         for root, _, files in os.walk(self.source_dir):
             root_path = Path(root)
             for file_name in files:
                 full_path = root_path / file_name
                 
-                # Check eligibility
                 file_type_group = self._get_file_type_group(full_path)
                 if file_type_group == 'OTHER' and not full_path.suffix == '':
                     continue 
@@ -163,11 +178,9 @@ class FileScanner:
 
                 self.files_scanned_count += 1
                 
-                # Fast Skip
                 if self._check_if_known_and_unchanged(full_path, file_stat):
                     continue
                 
-                # Tuple: (Path, Stat, Group)
                 files_to_process.append((full_path, file_stat, file_type_group))
 
         print(f"Files requiring hashing: {len(files_to_process)}")
@@ -178,18 +191,17 @@ class FileScanner:
 
         # 2. Multithreaded Hashing
         print(f"Spinning up {self.max_workers} threads for hashing...")
-        print("NOTE: If system becomes sluggish, reduce HASHING_THREADS in config.py")
-        print("\n" * (self.max_workers + 1)) # Clear space for the bars
+        print("\n" * (self.max_workers + 1)) # Clear space
+
+        batch_mc = [] # MediaContent buffer
+        batch_fpi = [] # FilePathInstances buffer
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit tasks
-            # We map future -> original data so we know what file it was
             future_to_file = {
                 executor.submit(self._calculate_sha256_worker, (f_path, f_stat.st_size)): (f_path, f_stat, f_group) 
                 for f_path, f_stat, f_group in files_to_process
             }
             
-            # Position 0 is for the Overall Progress
             with tqdm(total=len(files_to_process), desc="Total Progress", position=0) as pbar_main:
                 for future in concurrent.futures.as_completed(future_to_file):
                     f_path, f_stat, f_group = future_to_file[future]
@@ -197,36 +209,47 @@ class FileScanner:
                     
                     try:
                         content_hash = future.result()
-                    except Exception as e:
+                    except Exception:
                         continue
                         
                     if not content_hash:
                         continue
 
-                    # 3. Database Write (Sequential, Main Thread)
-                    # We do this here to avoid DB locking issues with threads
+                    # 3. Buffer Results
                     full_path_str = str(f_path)
                     relative_path_str = str(f_path.relative_to(self.source_dir))
                     date_modified_str = datetime.datetime.fromtimestamp(f_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    batch_mc.append((content_hash, f_stat.st_size, f_group, date_modified_str))
+                    batch_fpi.append((content_hash, full_path_str, full_path_str, relative_path_str, date_modified_str, 0))
+                    self.files_inserted_count += 1
+                    
+                    # 4. Batch Insert
+                    if len(batch_mc) >= DB_BATCH_SIZE:
+                        self._flush_batch(batch_mc, batch_fpi)
+                        batch_mc.clear()
+                        batch_fpi.clear()
 
-                    self.db.execute_query(
-                        "INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, date_best) VALUES (?, ?, ?, ?)", 
-                        (content_hash, f_stat.st_size, f_group, date_modified_str)
-                    )
-
-                    try:
-                        res = self.db.execute_query(
-                            "INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path, date_modified, is_primary) VALUES (?, ?, ?, ?, ?, ?)",
-                            (content_hash, full_path_str, full_path_str, relative_path_str, date_modified_str, 0)
-                        )
-                        if isinstance(res, int) and res > 0:
-                            self.files_inserted_count += 1
-                            # Update RAM cache immediately
-                            self.known_files_cache[full_path_str] = (date_modified_str, f_stat.st_size)
-                    except sqlite3.Error:
-                        pass
+            # Final Flush
+            if batch_mc:
+                self._flush_batch(batch_mc, batch_fpi)
 
         print(f"\nScan complete. Total files scanned: {self.files_scanned_count}, new recorded: {self.files_inserted_count}")
+
+    def _flush_batch(self, mc_data, fpi_data):
+        """Writes buffered data to DB."""
+        try:
+            # Using execute_many which we added to DatabaseManager
+            self.db.execute_many(
+                "INSERT OR IGNORE INTO MediaContent (content_hash, size, file_type_group, date_best) VALUES (?, ?, ?, ?)", 
+                mc_data
+            )
+            self.db.execute_many(
+                "INSERT OR IGNORE INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path, date_modified, is_primary) VALUES (?, ?, ?, ?, ?, ?)",
+                fpi_data
+            )
+        except sqlite3.Error as e:
+            print(f"Batch Insert Error: {e}")
 
 if __name__ == "__main__":
     manager = ConfigManager()
