@@ -52,10 +52,12 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Configurable FFmpeg binary path and arguments via organizer_config.json.",
     "FIX: Enforced '-pix_fmt yuv420p' and '-ac 2' in FFmpeg to ensure browser compatibility.",
     "FIX: Added robust path detection for FFmpeg to handle Folder paths vs Binary paths (fixes WinError 5).",
-    "PERFORMANCE: Added '-tune zerolatency' and '-g 60' to FFmpeg to fix browser playback timeouts."
+    "PERFORMANCE: Added '-tune zerolatency' and '-g 60' to FFmpeg to fix browser playback timeouts.",
+    "DEBUG: Added stderr capture to FFmpeg stream to diagnose transcoding failures.",
+    "COMPATIBILITY: Forced '-profile:v baseline' and '-reset_timestamps 1' to fix Gray Screen/0:00 duration issues."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.53
+# Version: 0.10.55
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -133,12 +135,10 @@ def transcode_video_stream(path):
     settings = CONFIG.FFMPEG_SETTINGS
     
     # 1. Base Command
-    # -analyzeduration/probesize help FFmpeg start faster on network streams or complex headers
-    cmd = [FFMPEG_BINARY, '-analyzeduration', '50M', '-probesize', '50M', '-i', str(path)]
+    # -analyzeduration/probesize help FFmpeg start faster on network streams
+    cmd = [FFMPEG_BINARY, '-analyzeduration', '100M', '-probesize', '100M', '-i', str(path)]
     
     # 2. Transcoding Settings
-    # WEB COMPATIBILITY FIX: Force yuv420p. Browsers reject yuv444 or yuv422.
-    cmd.extend(['-pix_fmt', 'yuv420p'])
     
     cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
     
@@ -148,31 +148,42 @@ def transcode_video_stream(path):
     if settings.get('crf'):
         cmd.extend(['-crf', settings.get('crf')])
 
-    # CRITICAL PERFORMANCE FLAG: Zero Latency prevents FFmpeg from buffering frames
-    # This ensures the browser gets the first byte immediately.
+    # CRITICAL WEB COMPATIBILITY FLAGS
+    # ---------------------------------------------------------
+    # 1. Force YUV420P: Browsers typically cannot render 4:4:4 or 4:2:2 profiles.
+    cmd.extend(['-pix_fmt', 'yuv420p'])
+    
+    # 2. Zero Latency: Prevents FFmpeg from buffering frames before sending data.
     cmd.extend(['-tune', 'zerolatency'])
-
+    
+    # 3. Baseline Profile: Disables B-frames. Old/Strict HTML5 players often require this
+    #    for real-time streams where they can't buffer B-frames efficiently.
+    cmd.extend(['-profile:v', 'baseline'])
+    
     # Audio Settings
-    # WEB COMPATIBILITY FIX: Force 2 channels.
-    cmd.extend(['-c:a', settings.get('audio_codec', 'aac'), '-ac', '2'])
+    # WEB COMPATIBILITY FIX: Force 2 channels and 44.1kHz standard AAC.
+    cmd.extend(['-c:a', settings.get('audio_codec', 'aac'), '-ac', '2', '-ar', '44100'])
     
     # 3. User Custom Flags
     if settings.get('extra_args'):
         cmd.extend(settings.get('extra_args'))
 
     # 4. Container Flags
-    # -g 60: Force a keyframe every 60 frames (approx 2s). Crucial for seeking/starting.
+    # -reset_timestamps 1: Resets input timestamps to 0. Crucial for "live" transcoding 
+    #    where the browser expects the timeline to start *now*.
+    # -g 30: Force a keyframe every 30 frames (1 sec). Fast seek/startup.
     cmd.extend([
         '-f', 'mp4',
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 
-        '-g', '60', 
+        '-reset_timestamps', '1',
+        '-g', '30', 
         'pipe:1'
     ])
     
     print(f"[FFmpeg] Running: {' '.join(cmd)}")
     
     # Start FFmpeg process
-    # stderr=sys.stderr ensures errors print to the Console immediately
+    # stderr=sys.stderr allows you to see the actual conversion speed and errors in your console.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=sys.stderr, bufsize=10**6)
     
     try:
@@ -490,7 +501,7 @@ def api_report():
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1000000
+        mp = (w * h) / 1_000_000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
@@ -589,3 +600,4 @@ if __name__ == '__main__':
         print_version_info(__file__, "Web Server")
         sys.exit(0)
     run_server(ConfigManager())
+    
