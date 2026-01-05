@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -31,10 +31,11 @@ _CHANGELOG_ENTRIES = [
     "CLI: Added --version and --help support.",
     "FIX: Implemented special SQL logic for browsing files with no extension ('no_ext').",
     "UX: Clarified Duplicate Table vs Stats distinction.",
-    "FEATURE: Added 'History' tab to File Inspector for viewing Original Name and Source Copies."
+    "FEATURE: Added 'History' tab to File Inspector for viewing Original Name and Source Copies.",
+    "UX: Added Database Name indicator in Navbar to distinguish Source Scan vs Clean Export."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.29
+# Version: 0.6.30
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -54,6 +55,7 @@ app = Flask(__name__)
 # Global instances
 DB_PATH = None
 CONFIG = None
+DB_NAME_LABEL = "Source Index"
 
 # --- DATABASE HELPERS ---
 def norm_path_sql(path):
@@ -207,7 +209,10 @@ HTML_TEMPLATE = """
                 </div>
                 <span class="text-muted border-start ps-3" id="view-label">All Files</span>
             </div>
-            <button class="btn btn-sm btn-dark" onclick="table.ajax.reload()"><i class="bi bi-arrow-clockwise"></i></button>
+            <div class="d-flex align-items-center gap-3">
+                <span class="badge bg-primary" id="db-label">DB: Loading...</span>
+                <button class="btn btn-sm btn-dark" onclick="table.ajax.reload()"><i class="bi bi-arrow-clockwise"></i></button>
+            </div>
         </div>
 
         <!-- View: Table -->
@@ -317,6 +322,11 @@ HTML_TEMPLATE = """
             $('#st-size').text(d.total_size);
             $('#st-dupes').text(d.duplicates.toLocaleString());
             $('#st-waste').text(d.wasted_size);
+            $('#db-label').text(d.db_label);
+            
+            if (d.db_label.includes("Clean")) {
+                $('#db-label').removeClass('bg-primary').addClass('bg-success');
+            }
         });
     }
 
@@ -460,15 +470,17 @@ HTML_TEMPLATE = """
             $('#modal-download').attr('href', `/api/media/${id}`);
             
             // HISTORY TAB
-            let historyHtml = '<div class="text-muted small">No history available (Is this a Clean Export?)</div>';
+            let historyHtml = '<div class="text-muted small p-3">No history available (Is this a Clean Export?)</div>';
             if (meta.Original_Filename) {
-                historyHtml = `<p><strong>Original Name:</strong> ${meta.Original_Filename}</p>`;
+                historyHtml = `<div class="p-3"><p><strong>Original Name:</strong> ${meta.Original_Filename}</p>`;
                 if (meta.Source_Copies && meta.Source_Copies.length > 0) {
-                    historyHtml += '<h6>Sources / Duplicates Found:</h6><ul class="list-group list-group-flush bg-dark">';
+                    historyHtml += '<h6>Sources / Duplicates Found:</h6><ul class="list-group list-group-flush bg-dark border-secondary">';
                     meta.Source_Copies.forEach(path => {
-                        historyHtml += `<li class="list-group-item bg-dark text-secondary small p-1">${path}</li>`;
+                        historyHtml += `<li class="list-group-item bg-dark text-secondary small p-1 border-secondary">${path}</li>`;
                     });
-                    historyHtml += '</ul>';
+                    historyHtml += '</ul></div>';
+                } else {
+                    historyHtml += '</div>';
                 }
             }
             $('#history-content').html(historyHtml);
@@ -528,7 +540,17 @@ def api_stats():
     wasted = conn.execute("SELECT SUM(mc.size) FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash=mc.content_hash WHERE fpi.is_primary=0").fetchone()[0] or 0
     dupes = conn.execute("SELECT COUNT(*) FROM FilePathInstances WHERE is_primary=0").fetchone()[0]
     conn.close()
-    return jsonify({'total_files': total, 'total_size': format_size(size), 'duplicates': dupes, 'wasted_size': format_size(wasted)})
+    
+    # Check DB Name for Label
+    db_name = Path(DB_PATH).name
+    label = "Source Index"
+    if "clean" in db_name.lower(): label = "Clean Export"
+    
+    return jsonify({
+        'total_files': total, 'total_size': format_size(size), 
+        'duplicates': dupes, 'wasted_size': format_size(wasted),
+        'db_label': label
+    })
 
 @app.route('/api/tree')
 def api_tree():
@@ -586,7 +608,6 @@ def api_files():
     
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
-        # FIXED: Logic moved out of f-string
         param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(param_val)
@@ -756,9 +777,16 @@ def api_report():
 def run_server(config_manager):
     global DB_PATH, CONFIG
     CONFIG = config_manager
-    DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
-    if not DB_PATH.exists(): return
-    print("Starting Dashboard on http://127.0.0.1:5000")
+    # DB_PATH might have been set externally by main.py
+    if DB_PATH is None:
+        DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
+        
+    if not Path(DB_PATH).exists(): 
+        print(f"Error: Database not found at {DB_PATH}")
+        return
+        
+    print(f"Starting Dashboard on http://127.0.0.1:5000")
+    print(f"Database: {DB_PATH}")
     app.run(port=5000, debug=False)
 
 if __name__ == '__main__':
