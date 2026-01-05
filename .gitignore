@@ -6,6 +6,8 @@ __pycache__/
 *$py.class
 *.sqlite
 *organized_media_output*
+*test_output_coverage*
+test_run.log.txt
 
 # C extensions
 *.so
