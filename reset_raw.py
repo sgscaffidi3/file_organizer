@@ -1,4 +1,3 @@
---- START OF FILE reset_raw.py ---
 # ==============================================================================
 # File: reset_raw.py
 # Utility to force re-processing of RAW files
