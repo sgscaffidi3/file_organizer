@@ -11,14 +11,13 @@ _CHANGELOG_ENTRIES = [
     "Added CLI argument parsing for --version to allow clean exit during health checks.",
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
     "CRITICAL FIX: Added optional `output_dir` to `__init__` to enable test environment isolation, resolving `AttributeError` in test suite setup.",
-    "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes."
+    "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes.",
+    "FEATURE: Added FFMPEG_SETTINGS property to expose video transcoding configuration."
 ]
 # ------------------------------------------------------------------------------
 import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-# REMOVED: import argparse
-# REMOVED: import sys
 
 # --- Project Dependencies ---
 from version_util import print_version_info
@@ -79,6 +78,19 @@ class ConfigManager:
         """Returns organizational preferences (e.g., date format, strategy)."""
         return self._data.get('organization', {})
 
+    @property
+    def FFMPEG_SETTINGS(self) -> Dict[str, Any]:
+        """Returns FFmpeg configuration settings."""
+        defaults = {
+            "binary_path": None,
+            "video_codec": "libx264",
+            "audio_codec": "aac",
+            "preset": "ultrafast",
+            "crf": "23",
+            "extra_args": []
+        }
+        return self._data.get('ffmpeg', defaults)
+
 if __name__ == "__main__":
     
     # CRITICAL IMPORT FIX: Move system/cli imports to the execution block
@@ -99,3 +111,4 @@ if __name__ == "__main__":
         print(f"Source Directory: {manager.SOURCE_DIR}")
         print(f"Output Directory: {manager.OUTPUT_DIR}")
         print("File Groups:", manager.FILE_GROUPS)
+        print("FFmpeg Settings:", manager.FFMPEG_SETTINGS)
