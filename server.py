@@ -45,10 +45,12 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added On-the-Fly RAW Image Conversion (NEF/CR2 -> JPEG) via rawpy.",
     "FEATURE: Added .DOCX Text Extraction for browser preview.",
     "FEATURE: Added On-the-Fly HEIC Image Conversion (HEIC -> JPEG) via Pillow-HEIF.",
-    "NETWORKING: Changed host to '0.0.0.0' to allow access from other computers on the LAN."
+    "NETWORKING: Changed host to '0.0.0.0' to allow access from other computers on the LAN.",
+    "FIX: Added Cache-Busting (?t=timestamp) to image previews to force browser to load High-Res RAW conversions.",
+    "DEBUG: Added console logging for RAW conversion attempts."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.9.45
+# Version: 0.9.48
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -337,10 +339,26 @@ def serve(id):
         path = Path(row[0])
         ext = path.suffix.lower()
         
-        # TRANSCODING: RAW & HEIC -> JPEG
-        transcode_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif']
-        
-        if ext in transcode_exts:
+        # RAW Conversion
+        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif']:
+            print(f"[Media] Processing {ext} file: {path.name}")
+            
+            # 1. Try Rawpy (High Quality) for RAWs
+            if rawpy and ext not in ['.heic', '.heif']:
+                try:
+                    with rawpy.imread(str(path)) as raw:
+                        rgb = raw.postprocess(use_camera_wb=True)
+                    if Image:
+                        img = Image.fromarray(rgb)
+                        img_io = io.BytesIO()
+                        img.save(img_io, 'JPEG', quality=85)
+                        img_io.seek(0)
+                        print(f"[Rawpy] Success.")
+                        return send_file(img_io, mimetype='image/jpeg')
+                except Exception as e:
+                    print(f"[Rawpy] Failed: {e}")
+
+            # 2. Try Pillow (Thumbnail or HEIC)
             if Image:
                 try:
                     img = Image.open(path)
@@ -348,11 +366,10 @@ def serve(id):
                     img_io = io.BytesIO()
                     img.save(img_io, 'JPEG', quality=85)
                     img_io.seek(0)
+                    print(f"[Pillow] Success.")
                     return send_file(img_io, mimetype='image/jpeg')
                 except Exception as e:
-                    print(f"Transcode Error: {e}")
-                    # Fallback
-                    return send_file(row[0])
+                     print(f"[Pillow] Failed: {e}")
         
         mime, _ = mimetypes.guess_type(row[0])
         return send_file(row[0], mimetype=mime)
@@ -445,7 +462,6 @@ def run_server(config_manager):
         return
     print(f"Starting Dashboard on http://127.0.0.1:5000")
     print(f"Database: {DB_PATH}")
-    # HOST 0.0.0.0 is the magic key for LAN access
     app.run(host='0.0.0.0', port=5000, debug=False)
 
 if __name__ == '__main__':
