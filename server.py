@@ -56,10 +56,12 @@ _CHANGELOG_ENTRIES = [
     "DEBUG: Added stderr capture to FFmpeg stream to diagnose transcoding failures.",
     "COMPATIBILITY: Forced '-profile:v baseline' and '-reset_timestamps 1' to fix Gray Screen/0:00 duration issues.",
     "CRITICAL FIX: Set subprocess `bufsize=0` to prevent Python from holding video headers, fixing the Gray Screen hanging issue.",
-    "DEBUG: Implemented threaded stderr reader to print FFmpeg logs to console in real-time."
+    "DEBUG: Implemented threaded stderr reader to print FFmpeg logs to console in real-time.",
+    "FIX: Resolved absolute path for FFmpeg input to prevent 'No such file' errors on nested directories.",
+    "DEBUG: Simplified stderr handling to write directly to sys.stderr for immediate feedback."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.57
+# Version: 0.10.59
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -70,7 +72,6 @@ import sys
 import io
 import subprocess
 import shutil
-import threading
 from pathlib import Path
 from collections import defaultdict
 from flask import Flask, render_template, request, jsonify, send_file, abort, Response, stream_with_context
@@ -127,83 +128,92 @@ def format_size(size_bytes):
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
 
-def log_reader(proc):
-    """Reads stderr from the FFmpeg process and prints it to the console."""
-    for line in iter(proc.stderr.readline, b''):
-        try:
-            print(f"[FFmpeg] {line.decode('utf-8').strip()}")
-        except:
-            pass
-
-def transcode_video_stream(path):
+def transcode_video_stream(path_str):
     """
     Generates a stream of bytes from FFmpeg, transcoding the input 
     to fragmented MP4 (H.264/AAC) for browser playback.
     """
     if not FFMPEG_BINARY:
         return 
-        
+    
+    # 1. Resolve Path
+    abs_path = Path(path_str).resolve()
+    if not abs_path.exists():
+        print(f"[FFmpeg] ERROR: Input file not found: {abs_path}")
+        return
+
     settings = CONFIG.FFMPEG_SETTINGS
     
-    # 1. Base Command
-    cmd = [FFMPEG_BINARY, '-analyzeduration', '50M', '-probesize', '50M', '-i', str(path)]
+    # 2. Build Command
+    cmd = [FFMPEG_BINARY, '-y'] # -y Overwrite (though we use pipe)
     
-    # 2. Transcoding Settings
-    # WEB COMPATIBILITY FIX: Force yuv420p. Browsers reject yuv444 or yuv422.
-    cmd.extend(['-pix_fmt', 'yuv420p'])
+    # Input optimizations
+    cmd.extend(['-analyzeduration', '50M', '-probesize', '50M'])
+    cmd.extend(['-i', str(abs_path)])
     
+    # Video
     cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
     
     if settings.get('preset'):
         cmd.extend(['-preset', settings.get('preset')])
-        
+    
     if settings.get('crf'):
         cmd.extend(['-crf', settings.get('crf')])
 
-    # CRITICAL PERFORMANCE FLAG: Zero Latency prevents FFmpeg from buffering frames
-    cmd.extend(['-tune', 'zerolatency'])
-    
-    # Baseline profile is safest for HTML5
+    # WEB COMPATIBILITY: Force standard pixel format and baseline profile
+    cmd.extend(['-pix_fmt', 'yuv420p'])
     cmd.extend(['-profile:v', 'baseline'])
+    
+    # LATENCY: Zero latency is critical for streaming response time
+    cmd.extend(['-tune', 'zerolatency'])
 
-    # Audio Settings
-    # WEB COMPATIBILITY FIX: Force 2 channels and 44.1kHz standard AAC.
+    # Audio
     cmd.extend(['-c:a', settings.get('audio_codec', 'aac'), '-ac', '2', '-ar', '44100'])
     
-    # 3. User Custom Flags
+    # User Extras
     if settings.get('extra_args'):
         cmd.extend(settings.get('extra_args'))
 
-    # 4. Container Flags
-    # -reset_timestamps 1: Resets input timestamps to 0.
-    # -movflags frag_keyframe+empty_moov+default_base_moof: REQUIRED for MP4 streaming
+    # Container (Fragmented MP4 for streaming)
     cmd.extend([
         '-f', 'mp4',
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 
         '-reset_timestamps', '1',
-        '-g', '30', 
+        '-g', '30', # Keyframe every 30 frames
         'pipe:1'
     ])
     
     print(f"[FFmpeg] Command: {' '.join(cmd)}")
     
-    # Start FFmpeg process
-    # bufsize=0 is CRITICAL. If buffered, Python holds the MP4 header and browser times out.
-    # stderr=subprocess.PIPE allows us to capture logs in a separate thread.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-    
-    # Start logging thread
-    t = threading.Thread(target=log_reader, args=(proc,))
-    t.daemon = True # Daemon thread dies when main thread dies
-    t.start()
+    # 3. Execution
+    # We map stderr to sys.stderr so it appears in your console immediately.
+    # We use bufsize=0 to ensure bytes aren't held back.
+    proc = subprocess.Popen(
+        cmd, 
+        stdout=subprocess.PIPE, 
+        stderr=sys.stderr, 
+        bufsize=0
+    )
     
     try:
+        # Read in larger chunks (32KB) for efficiency
         while True:
-            # Read small chunks to keep the stream flowing smoothly
-            data = proc.stdout.read(1024 * 64)
+            # Check if process is dead
+            if proc.poll() is not None:
+                if proc.returncode != 0:
+                    print(f"[FFmpeg] Process exited with error code: {proc.returncode}")
+                break
+                
+            data = proc.stdout.read(32768)
             if not data:
                 break
             yield data
+    except GeneratorExit:
+        # Client disconnected
+        proc.terminate()
+    except Exception as e:
+        print(f"[FFmpeg] Exception: {e}")
+        proc.kill()
     finally:
         if proc.poll() is None:
             proc.terminate()
@@ -469,11 +479,7 @@ def serve(id):
         non_native_video = ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts']
         if FFMPEG_BINARY and ext in non_native_video:
             print(f"[Media] Transcoding {ext} video: {path.name}")
-            # Cache-Control: no-cache prevents browser from caching partial broken streams
-            response = Response(stream_with_context(transcode_video_stream(path)), mimetype='video/mp4')
-            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-            response.headers['Accept-Ranges'] = 'none' 
-            return response
+            return Response(stream_with_context(transcode_video_stream(path)), mimetype='video/mp4')
 
         mime, _ = mimetypes.guess_type(row[0])
         return send_file(row[0], mimetype=mime)
