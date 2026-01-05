@@ -157,6 +157,7 @@
             </div>
             <div class="d-flex align-items-center gap-3">
                 <span class="badge bg-primary" id="db-label">DB: Loading...</span>
+                <a href="/api/export_db" target="_blank" class="btn btn-sm btn-success"><i class="bi bi-database-down"></i> Export DB</a>
                 <button class="btn btn-sm btn-dark" onclick="table.ajax.reload()"><i class="bi bi-arrow-clockwise"></i></button>
             </div>
         </div>
@@ -232,17 +233,25 @@
                 <div class="col-md-5">
                     <ul class="nav nav-tabs mb-3" id="metaTabs">
                         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-meta">Metadata</button></li>
-                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history">History / Source</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-notes">Notes</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history">History</button></li>
                     </ul>
                     <div class="tab-content">
                         <div class="tab-pane fade show active" id="tab-meta">
                             <pre id="modal-json" class="p-3 rounded bg-black text-success" style="height:350px; overflow:auto; font-size:0.85rem;"></pre>
                         </div>
+                        <div class="tab-pane fade" id="tab-notes">
+                            <div class="p-2">
+                                <label class="form-label text-muted small">User Notes (Saved to Database)</label>
+                                <textarea id="user-notes" class="form-control bg-dark text-light border-secondary" rows="10" placeholder="Add your notes here..."></textarea>
+                                <button class="btn btn-primary w-100 mt-3" onclick="saveNotes()">Save Notes</button>
+                            </div>
+                        </div>
                         <div class="tab-pane fade" id="tab-history">
                             <div id="history-content" class="p-2 text-light" style="height:350px; overflow:auto;"></div>
                         </div>
                     </div>
-                    <a id="modal-download" href="#" target="_blank" class="btn btn-primary w-100 mt-3"><i class="bi bi-box-arrow-up-right"></i> Open Original</a>
+                    <a id="modal-download" href="#" target="_blank" class="btn btn-outline-light w-100 mt-3"><i class="bi bi-box-arrow-up-right"></i> Open Original</a>
                 </div>
             </div>
         </div>
@@ -262,6 +271,7 @@
     let table;
     let map = null;
     let markers = null;
+    let currentFileId = null;
     let filterState = { type: 'all', val: '' };
 
     $(document).ready(function() {
@@ -448,11 +458,15 @@
 
     // --- MODAL ---
     function openMeta(id) {
+        currentFileId = id;
         $.get(`/api/details/${id}`, function(d) {
             let meta = {};
             try { meta = JSON.parse(d.metadata); } catch(e) {}
             $('#modal-json').text(JSON.stringify(meta, null, 4));
             $('#modal-download').attr('href', `/api/media/${id}`);
+            
+            // Populate Notes
+            $('#user-notes').val(meta.User_Notes || '');
             
             // HISTORY TAB
             let historyHtml = '<div class="text-muted small p-3">No history available (Is this a Clean Export?)</div>';
@@ -498,6 +512,26 @@
             
             $('#modal-preview').html(preview);
             new bootstrap.Modal('#metaModal').show();
+        });
+    }
+    
+    function saveNotes() {
+        const notes = $('#user-notes').val();
+        if (!currentFileId) return;
+        
+        $.ajax({
+            url: '/api/update_notes',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ id: currentFileId, notes: notes }),
+            success: function(res) {
+                alert('Notes saved successfully!');
+                // Reload meta to refresh JSON view
+                openMeta(currentFileId);
+            },
+            error: function(err) {
+                alert('Failed to save notes.');
+            }
         });
     }
     
