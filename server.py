@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 8
+_MINOR_VERSION = 9
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -42,11 +42,11 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Replaced slow Python NORM_PATH function with native SQLite REPLACE() for massive speedup.",
     "FIX: Ensured metadata API returns valid JSON string '{}' even if DB is NULL to prevent JS display errors.",
     "REFACTOR: Separated HTML template into 'templates/dashboard.html' (Standard Flask MVC).",
-    "FEATURE: Added On-the-Fly RAW Image Conversion (NEF/CR2 -> JPEG) for browser display.",
+    "FEATURE: Added On-the-Fly RAW Image Conversion (NEF/CR2 -> JPEG) via rawpy.",
     "FEATURE: Added .DOCX Text Extraction for browser preview."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.8.41
+# Version: 0.9.43
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -62,13 +62,18 @@ from flask import Flask, render_template, request, jsonify, send_file, abort, Re
 # Import Pillow for Image Conversion
 try:
     from PIL import Image
-    # Try to enable HEIC support if installed
     try:
         from pillow_heif import register_heif_opener
         register_heif_opener()
     except ImportError: pass
 except ImportError:
     Image = None
+
+# Import rawpy for high-quality RAW conversion
+try:
+    import rawpy
+except ImportError:
+    rawpy = None
 
 # Import Docx for Word Preview
 try:
@@ -79,19 +84,15 @@ except ImportError:
 from database_manager import DatabaseManager
 from config_manager import ConfigManager
 
-# Configure Flask to look for templates in the local folder
 template_dir = Path(__file__).parent / 'templates'
 if not template_dir.exists():
     print(f"WARNING: 'templates' directory not found at {template_dir}")
-    print("Please create the directory and add 'dashboard.html'")
 
 app = Flask(__name__, template_folder=str(template_dir))
 
-# Global instances
 DB_PATH = None
 CONFIG = None
 
-# --- DATABASE HELPERS ---
 def norm_path_sql(path):
     if path is None: return ""
     return str(path).replace('\\', '/')
@@ -99,7 +100,6 @@ def norm_path_sql(path):
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # Kept for compatibility with legacy queries
     conn.create_function("NORM_PATH", 1, norm_path_sql)
     return conn
 
@@ -144,7 +144,6 @@ def api_tree():
         p = Path(r[0]).parent
         if str(p) != '.': paths.add(str(p))
     
-    # Helper to build dict tree
     tree = {}
     for path in paths:
         clean = str(path).replace('\\', '/')
@@ -171,7 +170,6 @@ def api_types():
 @app.route('/api/quality')
 def api_quality():
     conn = get_db()
-    
     # Video
     res_data = conn.execute("SELECT height FROM MediaContent WHERE file_type_group='VIDEO'").fetchall()
     res_stats = {'4K+':0, '1080p':0, '720p':0, 'SD':0}
@@ -182,7 +180,6 @@ def api_quality():
         elif h >= 1080: res_stats['1080p'] += 1
         elif h >= 720: res_stats['720p'] += 1
         else: res_stats['SD'] += 1
-        
     # Image
     img_data = conn.execute("SELECT width, height FROM MediaContent WHERE file_type_group='IMAGE'").fetchall()
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
@@ -193,7 +190,6 @@ def api_quality():
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
         else: img_stats['Low (<2 MP)'] += 1
-        
     # Audio
     aud_data = conn.execute("SELECT bitrate FROM MediaContent WHERE file_type_group='AUDIO'").fetchall()
     aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0}
@@ -207,7 +203,6 @@ def api_quality():
             elif b >= 128000: aud_stats['Standard (128k+)'] += 1
             else: aud_stats['Low (<128k)'] += 1
         except: pass
-        
     conn.close()
     return jsonify({'video': res_stats, 'image': img_stats, 'audio': aud_stats})
 
@@ -219,14 +214,10 @@ def api_files():
     start = int(args.get('start', 0))
     length = int(args.get('length', 25))
     search = args.get('search[value]', '').lower()
-    
-    # Sort
     col_idx = args.get('order[0][column]')
     col_dir = args.get('order[0][dir]', 'asc')
     col_map = {0:'mc.file_type_group', 2:'fpi.original_relative_path', 4:'mc.size', 5:'mc.date_best'}
     order_clause = f"ORDER BY {col_map.get(int(col_idx), 'fpi.original_relative_path')} {col_dir}" if col_idx else ""
-
-    # Filters
     f_type = args.get('f_type', 'all')
     f_val = args.get('f_val', '')
     min_size = args.get('min_size')
@@ -234,15 +225,11 @@ def api_files():
 
     base = """SELECT fpi.file_id, fpi.content_hash, fpi.original_relative_path, mc.file_type_group, mc.size, mc.date_best 
               FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash = mc.content_hash"""
-    
     where = []
     params = []
-    
     if search:
-        # Optimized search
         where.append("(REPLACE(fpi.original_relative_path, '\\', '/') LIKE ? OR mc.file_type_group LIKE ? OR mc.extended_metadata LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
-    
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
         param_val = f"{clean_val}/%" 
@@ -289,11 +276,9 @@ def api_files():
 
     if where: base += " WHERE " + " AND ".join(where)
     
-    # Totals
     try:
         total = conn.execute("SELECT COUNT(*) FROM FilePathInstances").fetchone()[0]
         filtered = conn.execute(f"SELECT COUNT(*) FROM ({base})", params).fetchone()[0]
-        
         sql = f"{base} {order_clause} LIMIT ? OFFSET ?"
         params.extend([length, start])
         rows = conn.execute(sql, params).fetchall()
@@ -302,7 +287,6 @@ def api_files():
         rows = []
         filtered = 0
         total = 0
-
     conn.close()
     
     data = []
@@ -311,7 +295,6 @@ def api_files():
             "id": r[0], "hash": r[1], "rel_path": r[2], "type": r[3], "size": r[4], 
             "size_str": format_size(r[4]), "date": r[5], "name": Path(r[2]).name
         })
-        
     return jsonify({"draw": draw, "recordsTotal": total, "recordsFiltered": filtered, "data": data})
 
 @app.route('/api/details/<int:id>')
@@ -319,7 +302,6 @@ def api_details(id):
     conn = get_db()
     row = conn.execute("SELECT fpi.file_id, fpi.original_relative_path, mc.file_type_group, mc.extended_metadata FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash = mc.content_hash WHERE fpi.file_id = ?", (id,)).fetchone()
     conn.close()
-    
     meta_val = row[3] if row and row[3] else "{}"
     if row:
         return jsonify({"id": row[0], "name": Path(row[1]).name, "type": row[2], "metadata": meta_val})
@@ -328,108 +310,82 @@ def api_details(id):
 
 @app.route('/api/content/<int:id>')
 def api_content(id):
-    """Retrieve text content for previewable files (TXT, MD, DOCX)."""
     conn = get_db()
     row = conn.execute("SELECT original_full_path FROM FilePathInstances WHERE file_id = ?", (id,)).fetchone()
     conn.close()
-    
-    if not row or not os.path.exists(row[0]):
-        return "File not found.", 404
-        
+    if not row or not os.path.exists(row[0]): return "File not found.", 404
     path = Path(row[0])
     ext = path.suffix.lower()
-    
     try:
-        # 1. Plain Text
         if ext in ['.txt', '.md', '.csv', '.json', '.xml', '.log', '.py', '.js', '.html', '.css', '.sh', '.bat', '.ini', '.rtf']:
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                return f.read()
-        
-        # 2. Word Documents (.docx)
+            with open(path, 'r', encoding='utf-8', errors='replace') as f: return f.read()
         elif ext == '.docx':
             if docx is None: return "python-docx library not installed."
             doc = docx.Document(path)
-            fullText = []
-            for para in doc.paragraphs:
-                fullText.append(para.text)
-            return '\n'.join(fullText)
-            
-        return "Preview not supported for this file type."
-    except Exception as e:
-        return f"Error reading file: {str(e)}", 500
+            return '\n'.join([p.text for p in doc.paragraphs])
+        return "Preview not supported."
+    except Exception as e: return f"Error: {e}", 500
 
 @app.route('/api/media/<int:id>')
 def serve(id):
     conn = get_db()
     row = conn.execute("SELECT original_full_path FROM FilePathInstances WHERE file_id=?", (id,)).fetchone()
     conn.close()
-    
     if row and os.path.exists(row[0]):
         path = Path(row[0])
         ext = path.suffix.lower()
         
-        # RAW Image Conversion
+        # RAW Conversion
         if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf']:
+            # Prefer rawpy for quality, fallback to Pillow
+            if rawpy:
+                try:
+                    with rawpy.imread(str(path)) as raw:
+                        rgb = raw.postprocess(use_camera_wb=True)
+                    if Image:
+                        img = Image.fromarray(rgb)
+                        img_io = io.BytesIO()
+                        img.save(img_io, 'JPEG', quality=85)
+                        img_io.seek(0)
+                        return send_file(img_io, mimetype='image/jpeg')
+                except Exception as e:
+                    print(f"rawpy failed: {e}")
+            
+            # Fallback to Pillow
             if Image:
                 try:
                     img = Image.open(path)
-                    # Convert to RGB (some RAW are RGBA or special modes)
-                    if img.mode not in ('RGB', 'L'):
-                        img = img.convert('RGB')
-                    
-                    # Save to memory buffer
+                    if img.mode not in ('RGB', 'L'): img = img.convert('RGB')
                     img_io = io.BytesIO()
                     img.save(img_io, 'JPEG', quality=85)
                     img_io.seek(0)
                     return send_file(img_io, mimetype='image/jpeg')
-                except Exception as e:
-                    print(f"RAW Conversion Error: {e}")
-                    # Fallback to sending raw file (browser will likely download it)
-                    return send_file(row[0])
-            else:
-                print("Pillow not installed/loaded.")
+                except: pass
         
         mime, _ = mimetypes.guess_type(row[0])
         return send_file(row[0], mimetype=mime)
-        
     abort(404)
 
 @app.route('/api/report')
 def api_report():
     conn = get_db()
-    
-    # 1. Type Distribution
-    type_data = conn.execute("""
-        SELECT mc.file_type_group, COUNT(*), SUM(mc.size)
-        FROM MediaContent mc
-        JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
-        GROUP BY mc.file_type_group
-    """).fetchall()
-    
+    type_data = conn.execute("SELECT mc.file_type_group, COUNT(*), SUM(mc.size) FROM MediaContent mc JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash GROUP BY mc.file_type_group").fetchall()
     type_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Category</th><th>Total Files</th><th>Total Size</th></tr></thead><tbody>'
     for grp, count, size in type_data:
         type_html += f"<tr><td>{grp}</td><td>{count:,}</td><td>{format_size(size)}</td></tr>"
     type_html += '</tbody></table>'
 
-    # 2. Extension Breakdown
-    ext_data = conn.execute("""
-        SELECT REPLACE(fpi.original_relative_path, '\\', '/'), mc.size 
-        FROM FilePathInstances fpi 
-        JOIN MediaContent mc ON fpi.content_hash = mc.content_hash
-    """).fetchall()
-    
+    ext_data = conn.execute("SELECT REPLACE(fpi.original_relative_path, '\\', '/'), mc.size FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash = mc.content_hash").fetchall()
     ext_stats = defaultdict(lambda: {'count': 0, 'size': 0})
     for p, s in ext_data:
         ext = Path(p).suffix.lower() or "No Ext"
         ext_stats[ext]['count'] += 1
         ext_stats[ext]['size'] += s
-    
     ext_html = '<table class="table table-dark table-sm table-striped report-table"><thead><tr><th>Extension</th><th>Count</th><th>Size</th></tr></thead><tbody>'
     for ext, stats in sorted(ext_stats.items(), key=lambda x: x[1]['size'], reverse=True)[:20]:
         ext_html += f"<tr><td>{ext}</td><td>{stats['count']:,}</td><td>{format_size(stats['size'])}</td></tr>"
     ext_html += '</tbody></table>'
 
-    # 3. Video Quality
     res_data = conn.execute("SELECT height FROM MediaContent WHERE file_type_group='VIDEO'").fetchall()
     res_stats = {'4K+':0, '1080p':0, '720p':0, 'SD':0}
     for r in res_data:
@@ -439,29 +395,25 @@ def api_report():
         elif h >= 1080: res_stats['1080p'] += 1
         elif h >= 720: res_stats['720p'] += 1
         else: res_stats['SD'] += 1
-        
     res_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Resolution</th><th>Count</th></tr></thead><tbody>'
     for k, v in res_stats.items():
         if v > 0: res_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
     res_html += '</tbody></table>'
 
-    # 4. Image Quality
     img_data = conn.execute("SELECT width, height FROM MediaContent WHERE file_type_group='IMAGE'").fetchall()
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1_000_000
+        mp = (w * h) / 1000000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
         else: img_stats['Low (<2 MP)'] += 1
-
     img_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Quality (Megapixels)</th><th>Count</th></tr></thead><tbody>'
     for k, v in img_stats.items():
         if v > 0: img_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
     img_html += '</tbody></table>'
 
-    # 5. Audio Quality
     aud_data = conn.execute("SELECT bitrate FROM MediaContent WHERE file_type_group='AUDIO'").fetchall()
     aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0}
     for r in aud_data:
@@ -474,21 +426,31 @@ def api_report():
             elif b >= 128000: aud_stats['Standard (128k+)'] += 1
             else: aud_stats['Low (<128k)'] += 1
         except: pass
-        
+    aud_html = '<table class="table table-dark table-striped report-table"><thead><tr><th>Quality</th><th>Count</th></tr></thead><tbody>'
+    for k, v in aud_stats.items():
+        if v > 0: aud_html += f"<tr><td>{k}</td><td>{v:,}</td></tr>"
+    aud_html += '</tbody></table>'
     conn.close()
-    return jsonify({'video': res_stats, 'image': img_stats, 'audio': aud_stats})
+    
+    full_html = f"""
+    <div class="row g-4">
+        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Content Overview</h4>{type_html}</div></div>
+        <div class="col-md-6"><div class="report-card"><h4 class="report-title">Top 20 Extensions (by Size)</h4>{ext_html}</div></div>
+        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Image Quality</h4>{img_html}</div></div>
+        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Video Resolution</h4>{res_html}</div></div>
+        <div class="col-md-4"><div class="report-card"><h4 class="report-title">Audio Quality</h4>{aud_html}</div></div>
+    </div>
+    """
+    return full_html
 
 def run_server(config_manager):
     global DB_PATH, CONFIG
     CONFIG = config_manager
-    # DB_PATH might have been set externally by main.py
     if DB_PATH is None:
         DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
-        
     if not Path(DB_PATH).exists(): 
         print(f"Error: Database not found at {DB_PATH}")
         return
-        
     print(f"Starting Dashboard on http://127.0.0.1:5000")
     print(f"Database: {DB_PATH}")
     app.run(port=5000, debug=False)
@@ -497,12 +459,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Media Organizer Web Server")
     parser.add_argument('-v', '--version', action='store_true', help='Show version info.')
     args = parser.parse_args()
-
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Web Server")
         sys.exit(0)
-    
-    # Normal execution (usually called via main.py)
-    # If run directly without main.py, it needs a config:
     run_server(ConfigManager())
