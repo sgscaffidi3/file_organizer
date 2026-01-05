@@ -60,10 +60,11 @@ _CHANGELOG_ENTRIES = [
     "FIX: Resolved absolute path for FFmpeg input to prevent 'No such file' errors on nested directories.",
     "DEBUG: Simplified stderr handling to write directly to sys.stderr for immediate feedback.",
     "PERFORMANCE: Removed -analyzeduration/-probesize flags which were causing startup hangs on large files.",
-    "CRITICAL FIX: Set `cwd` in subprocess to FFmpeg binary directory to ensure DLLs are found."
+    "CRITICAL FIX: Set `cwd` in subprocess to FFmpeg binary directory to ensure DLLs are found.",
+    "FEATURE: Added `ffprobe` detection and HEVC/H.265 detection to force transcoding for 'Audio Only' MP4s."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.61
+# Version: 0.10.62
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -113,6 +114,7 @@ app = Flask(__name__, template_folder=str(template_dir))
 DB_PATH = None
 CONFIG = None
 FFMPEG_BINARY = None
+FFPROBE_BINARY = None
 
 def norm_path_sql(path):
     if path is None: return ""
@@ -195,7 +197,7 @@ def transcode_video_stream(path_str):
         stdout=subprocess.PIPE, 
         stderr=sys.stderr, 
         bufsize=0,
-        cwd=cwd # <--- The fix for custom builds
+        cwd=cwd 
     )
     
     try:
@@ -217,6 +219,41 @@ def transcode_video_stream(path_str):
     finally:
         if proc.poll() is None:
             proc.terminate()
+
+def needs_transcoding(path_obj):
+    """
+    Determines if a video needs transcoding based on extension and codec.
+    """
+    ext = path_obj.suffix.lower()
+    
+    # 1. Always transcode unsupported containers
+    if ext in ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts', '.3gp']:
+        return True
+    
+    # 2. For MP4/MOV, check if it's HEVC (H.265)
+    # Browsers often fail to play HEVC natively
+    if ext in ['.mp4', '.mov'] and FFPROBE_BINARY:
+        try:
+            cmd = [
+                FFPROBE_BINARY, 
+                '-v', 'error', 
+                '-select_streams', 'v:0', 
+                '-show_entries', 'stream=codec_name', 
+                '-of', 'default=noprint_wrappers=1:nokey=1', 
+                str(path_obj.resolve())
+            ]
+            cwd = os.path.dirname(FFPROBE_BINARY)
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+            codec = result.stdout.strip().lower()
+            
+            # If codec is NOT h264 or av1 or vp8/9, we likely need to transcode
+            if codec and codec not in ['h264', 'av1', 'vp8', 'vp9']:
+                print(f"[Media] Detected non-web codec '{codec}' in {path_obj.name}. Transcoding enabled.")
+                return True
+        except Exception as e:
+            print(f"[Media] FFprobe check failed: {e}")
+            
+    return False
 
 # --- ROUTES ---
 @app.route('/')
@@ -475,9 +512,8 @@ def serve(id):
                 except Exception as e:
                      print(f"[Pillow] Failed: {e}")
         
-        # On-the-Fly Video Transcoding (for non-native formats)
-        non_native_video = ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts']
-        if FFMPEG_BINARY and ext in non_native_video:
+        # On-the-Fly Video Transcoding Check
+        if FFMPEG_BINARY and needs_transcoding(path):
             print(f"[Media] Transcoding {ext} video: {path.name}")
             return Response(stream_with_context(transcode_video_stream(path)), mimetype='video/mp4')
 
@@ -563,7 +599,7 @@ def api_report():
     return full_html
 
 def run_server(config_manager):
-    global DB_PATH, CONFIG, FFMPEG_BINARY
+    global DB_PATH, CONFIG, FFMPEG_BINARY, FFPROBE_BINARY
     CONFIG = config_manager
     if DB_PATH is None:
         DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
@@ -602,6 +638,16 @@ def run_server(config_manager):
     else:
         FFMPEG_BINARY = shutil.which('ffmpeg')
         
+    # DETERMINE FFPROBE PATH
+    if FFMPEG_BINARY:
+        # Assume ffprobe is next to ffmpeg
+        ffmpeg_path = Path(FFMPEG_BINARY)
+        probe_candidate = ffmpeg_path.parent / ('ffprobe.exe' if os.name == 'nt' else 'ffprobe')
+        if probe_candidate.exists():
+            FFPROBE_BINARY = str(probe_candidate)
+        else:
+            print("⚠️ FFmpeg found but FFprobe not found. Codec detection disabled.")
+
     print(f"Starting Dashboard on http://127.0.0.1:5000")
     print(f"Database: {DB_PATH}")
     
