@@ -48,10 +48,11 @@ _CHANGELOG_ENTRIES = [
     "NETWORKING: Changed host to '0.0.0.0' to allow access from other computers on the LAN.",
     "FIX: Added Cache-Busting (?t=timestamp) to image previews to force browser to load High-Res RAW conversions.",
     "DEBUG: Added console logging for RAW conversion attempts.",
-    "FEATURE: Added On-the-Fly Video Transcoding (MKV/AVI/WMV -> MP4) using FFmpeg streaming."
+    "FEATURE: Added On-the-Fly Video Transcoding (MKV/AVI/WMV -> MP4) using FFmpeg streaming.",
+    "FEATURE: Configurable FFmpeg binary path and arguments via organizer_config.json."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.49
+# Version: 0.10.50
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -99,7 +100,7 @@ app = Flask(__name__, template_folder=str(template_dir))
 
 DB_PATH = None
 CONFIG = None
-FFMPEG_AVAIL = shutil.which('ffmpeg') is not None
+FFMPEG_BINARY = None
 
 def norm_path_sql(path):
     if path is None: return ""
@@ -122,17 +123,42 @@ def transcode_video_stream(path):
     """
     Generates a stream of bytes from FFmpeg, transcoding the input 
     to fragmented MP4 (H.264/AAC) for browser playback.
+    
+    Reads arguments from organizer_config.json to allow customization.
     """
-    cmd = [
-        'ffmpeg',
-        '-i', str(path),
-        '-c:v', 'libx264',      # Video Codec
-        '-preset', 'ultrafast', # Speed over compression
-        '-c:a', 'aac',          # Audio Codec
-        '-f', 'mp4',            # Container
-        '-movflags', 'frag_keyframe+empty_moov', # Required for streaming MP4
-        'pipe:1'                # Output to stdout
-    ]
+    if not FFMPEG_BINARY:
+        return # Should not happen due to route check
+        
+    settings = CONFIG.FFMPEG_SETTINGS
+    
+    # 1. Base Command
+    cmd = [FFMPEG_BINARY, '-i', str(path)]
+    
+    # 2. Transcoding Settings (User Configurable)
+    cmd.extend(['-c:v', settings.get('video_codec', 'libx264')])
+    
+    # Preset (Speed vs Quality for SW encoding)
+    if settings.get('preset'):
+        cmd.extend(['-preset', settings.get('preset')])
+        
+    # CRF (Quality for SW encoding)
+    if settings.get('crf'):
+        cmd.extend(['-crf', settings.get('crf')])
+
+    # Audio Settings
+    cmd.extend(['-c:a', settings.get('audio_codec', 'aac')])
+    
+    # 3. User Custom Flags (e.g. HW acceleration specific options)
+    # Allows users to inject list like ["-rc", "vbr_hq", "-profile:v", "high"]
+    if settings.get('extra_args'):
+        cmd.extend(settings.get('extra_args'))
+
+    # 4. Required Streaming Flags (Do not change these)
+    # -movflags frag_keyframe+empty_moov is essential for streaming MP4 to browser without seeking support
+    cmd.extend(['-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', 'pipe:1'])
+    
+    # Debug print the command being run
+    print(f"[FFmpeg] Running: {' '.join(cmd)}")
     
     # Start FFmpeg process
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**6)
@@ -406,7 +432,7 @@ def serve(id):
         
         # On-the-Fly Video Transcoding (for non-native formats)
         non_native_video = ['.mkv', '.avi', '.wmv', '.flv', '.vob', '.mts', '.m2ts', '.ts']
-        if FFMPEG_AVAIL and ext in non_native_video:
+        if FFMPEG_BINARY and ext in non_native_video:
             print(f"[Media] Transcoding {ext} video: {path.name}")
             return Response(stream_with_context(transcode_video_stream(path)), mimetype='video/mp4')
 
@@ -492,19 +518,30 @@ def api_report():
     return full_html
 
 def run_server(config_manager):
-    global DB_PATH, CONFIG
+    global DB_PATH, CONFIG, FFMPEG_BINARY
     CONFIG = config_manager
     if DB_PATH is None:
         DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
     if not Path(DB_PATH).exists(): 
         print(f"Error: Database not found at {DB_PATH}")
         return
+    
+    # DETERMINE FFMPEG PATH
+    cfg = CONFIG.FFMPEG_SETTINGS
+    if cfg.get('binary_path'):
+        FFMPEG_BINARY = cfg.get('binary_path')
+    else:
+        FFMPEG_BINARY = shutil.which('ffmpeg')
+        
     print(f"Starting Dashboard on http://127.0.0.1:5000")
     print(f"Database: {DB_PATH}")
-    if FFMPEG_AVAIL:
-        print("✅ FFmpeg detected. On-the-fly video transcoding enabled.")
+    
+    if FFMPEG_BINARY:
+        print(f"✅ FFmpeg detected at: {FFMPEG_BINARY}")
+        print(f"   Settings: {cfg.get('video_codec', 'libx264')} / {cfg.get('preset', 'default')}")
     else:
         print("⚠️ FFmpeg not found. MKV/AVI/WMV playback disabled.")
+        
     app.run(host='0.0.0.0', port=5000, debug=False)
 
 if __name__ == '__main__':
