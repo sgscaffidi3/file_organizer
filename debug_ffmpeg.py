@@ -8,12 +8,39 @@ from config_manager import ConfigManager
 # 1. REPLACE THIS WITH THE PATH TO THE AVI FILE THAT IS FAILING
 TEST_FILE = r"organized_media_output\organized_media_output\2002\12\2002-12-23 14.15.28 Christmas Barn Bellport.avi"
 
+def get_ffmpeg_binary(config):
+    settings = config.FFMPEG_SETTINGS
+    candidate = settings.get('binary_path')
+    
+    if not candidate:
+        return "ffmpeg"
+        
+    path_obj = Path(candidate)
+    
+    # If it's a directory, look inside
+    if path_obj.is_dir():
+        if os.name == 'nt':
+            potential = path_obj / 'ffmpeg.exe'
+            potential_bin = path_obj / 'bin' / 'ffmpeg.exe'
+        else:
+            potential = path_obj / 'ffmpeg'
+            potential_bin = path_obj / 'bin' / 'ffmpeg'
+            
+        if potential.exists(): return str(potential)
+        if potential_bin.exists(): return str(potential_bin)
+        
+        print(f"❌ Error: Config points to directory '{candidate}' but ffmpeg executable not found inside.")
+        return None
+        
+    return candidate
+
 def test_transcode():
     config = ConfigManager()
-    settings = config.FFMPEG_SETTINGS
     
-    # Check Binary
-    binary = settings.get('binary_path') or "ffmpeg"
+    binary = get_ffmpeg_binary(config)
+    if not binary:
+        return
+
     print(f"Testing Binary: {binary}")
     
     input_path = Path(TEST_FILE).resolve()
@@ -21,7 +48,14 @@ def test_transcode():
     
     if not input_path.exists():
         print("❌ Error: Input file not found!")
-        return
+        # Try to find *any* avi file to help the user
+        print("Searching for any AVI file...")
+        found = list(Path('.').rglob('*.avi'))
+        if found:
+            print(f"Found: {found[0]}")
+            input_path = found[0]
+        else:
+            return
 
     # Build the exact command used by the server
     cmd = [
@@ -49,14 +83,18 @@ def test_transcode():
         process = subprocess.run(cmd, check=True, text=True, capture_output=True)
         print("✅ Transcoding SUCCESS!")
         print(f"Output saved to: {os.path.abspath('debug_output.mp4')}")
-        print("Try playing 'debug_output.mp4' in VLC or Chrome to verify.")
+        print("Please try playing 'debug_output.mp4' in VLC or Chrome to verify it works.")
         
     except subprocess.CalledProcessError as e:
         print("❌ Transcoding FAILED!")
-        print("STDERR Output:")
+        print("STDERR Output (The actual error from FFmpeg):")
+        print("="*60)
         print(e.stderr)
+        print("="*60)
     except FileNotFoundError:
-        print(f"❌ Error: Could not find FFmpeg binary at '{binary}'")
+        print(f"❌ Error: Could not execute binary at '{binary}'")
+    except Exception as e:
+        print(f"❌ Python Error: {e}")
 
 if __name__ == "__main__":
     test_transcode()
