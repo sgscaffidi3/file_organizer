@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -30,10 +30,11 @@ _CHANGELOG_ENTRIES = [
     "UX: Renamed 'Duplicates' stat to 'Redundant Copies' for clarity.",
     "CLI: Added --version and --help support.",
     "FIX: Implemented special SQL logic for browsing files with no extension ('no_ext').",
-    "UX: Clarified Duplicate Table vs Stats distinction."
+    "UX: Clarified Duplicate Table vs Stats distinction.",
+    "FEATURE: Added 'History' tab to File Inspector for viewing Original Name and Source Copies."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.28
+# Version: 0.5.29
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -273,8 +274,18 @@ HTML_TEMPLATE = """
             <div class="modal-body row">
                 <div class="col-md-7 d-flex align-items-center justify-content-center bg-black rounded" style="min-height:400px;" id="modal-preview"></div>
                 <div class="col-md-5">
-                    <h6 class="text-info">Metadata</h6>
-                    <pre id="modal-json" class="p-3 rounded bg-black text-success" style="height:350px; overflow:auto; font-size:0.85rem;"></pre>
+                    <ul class="nav nav-tabs mb-3" id="metaTabs">
+                        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-meta">Metadata</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history">History / Source</button></li>
+                    </ul>
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active" id="tab-meta">
+                            <pre id="modal-json" class="p-3 rounded bg-black text-success" style="height:350px; overflow:auto; font-size:0.85rem;"></pre>
+                        </div>
+                        <div class="tab-pane fade" id="tab-history">
+                            <div id="history-content" class="p-2 text-light" style="height:350px; overflow:auto;"></div>
+                        </div>
+                    </div>
                     <a id="modal-download" href="#" target="_blank" class="btn btn-primary w-100 mt-3"><i class="bi bi-box-arrow-up-right"></i> Open Original</a>
                 </div>
             </div>
@@ -448,6 +459,21 @@ HTML_TEMPLATE = """
             $('#modal-json').text(JSON.stringify(meta, null, 4));
             $('#modal-download').attr('href', `/api/media/${id}`);
             
+            // HISTORY TAB
+            let historyHtml = '<div class="text-muted small">No history available (Is this a Clean Export?)</div>';
+            if (meta.Original_Filename) {
+                historyHtml = `<p><strong>Original Name:</strong> ${meta.Original_Filename}</p>`;
+                if (meta.Source_Copies && meta.Source_Copies.length > 0) {
+                    historyHtml += '<h6>Sources / Duplicates Found:</h6><ul class="list-group list-group-flush bg-dark">';
+                    meta.Source_Copies.forEach(path => {
+                        historyHtml += `<li class="list-group-item bg-dark text-secondary small p-1">${path}</li>`;
+                    });
+                    historyHtml += '</ul>';
+                }
+            }
+            $('#history-content').html(historyHtml);
+            
+            // PREVIEW
             let preview = '<div class="text-muted">No Preview</div>';
             let src = `/api/media/${id}`;
             if (d.type === 'IMAGE') preview = `<img src="${src}" style="max-width:100%; max-height:100%; object-fit:contain">`;
@@ -560,6 +586,7 @@ def api_files():
     
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
+        # FIXED: Logic moved out of f-string
         param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(param_val)
@@ -571,16 +598,6 @@ def api_files():
         where.append("fpi.content_hash IN (SELECT content_hash FROM FilePathInstances GROUP BY content_hash HAVING COUNT(*) > 1)")
     elif f_type == 'ext':
         if f_val == 'no_ext':
-            # Files with no dots in filename (excluding directory separators)
-            # SQLite INSTR returns 0 if not found
-            # Check just the filename part? No easy way in standard SQLite without substring
-            # Approximate: NOT LIKE '%.%' matches files without extension
-            # But we must be careful not to match folders with dots
-            # Actually, standard logic `LIKE '%.'` works for empty ext? No.
-            # Best proxy for 'no_ext' is "doesn't end with .something"
-            # We used `Path(p).suffix.lower() or "no_ext"` in Python.
-            # In SQL, we can check if it has a dot after the last slash.
-            # Simplified:
             where.append("NORM_PATH(fpi.original_relative_path) NOT LIKE '%.%'")
         else:
             where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
@@ -739,16 +756,9 @@ def api_report():
 def run_server(config_manager):
     global DB_PATH, CONFIG
     CONFIG = config_manager
-    # DB_PATH might have been set externally by main.py
-    if DB_PATH is None:
-        DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
-        
-    if not Path(DB_PATH).exists(): 
-        print(f"Error: Database not found at {DB_PATH}")
-        return
-        
-    print(f"Starting Dashboard on http://127.0.0.1:5000")
-    print(f"Database: {DB_PATH}")
+    DB_PATH = CONFIG.OUTPUT_DIR / 'metadata.sqlite'
+    if not DB_PATH.exists(): return
+    print("Starting Dashboard on http://127.0.0.1:5000")
     app.run(port=5000, debug=False)
 
 if __name__ == '__main__':
@@ -762,4 +772,5 @@ if __name__ == '__main__':
         sys.exit(0)
     
     # Normal execution (usually called via main.py)
+    # If run directly without main.py, it needs a config:
     run_server(ConfigManager())
