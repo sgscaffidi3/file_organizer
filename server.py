@@ -34,10 +34,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added 'History' tab to File Inspector for viewing Original Name and Source Copies.",
     "UX: Added Database Name indicator in Navbar to distinguish Source Scan vs Clean Export.",
     "FEATURE: Added 'Quality' Tab to Sidebar for browsing by Resolution/Bitrate/Megapixels.",
-    "FEATURE: Added Text File Preview (.txt, .md, .csv, etc) in File Inspector."
+    "FEATURE: Added Text File Preview (.txt, .md, .csv, etc) in File Inspector.",
+    "SEARCH: Enhanced search to index 'extended_metadata', enabling search by Original Filename, Camera Model, etc."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.31
+# Version: 0.5.33
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -374,7 +375,7 @@ HTML_TEMPLATE = """
             order: [[2, 'asc']], // Default sort by Name
             pageLength: 25,
             lengthMenu: [25, 50, 100],
-            language: { search: "", searchPlaceholder: "Search filenames..." },
+            language: { search: "", searchPlaceholder: "Search files or metadata..." },
             dom: 'frtip',
             scrollY: 'calc(100vh - 280px)',
             scrollCollapse: true,
@@ -542,7 +543,6 @@ HTML_TEMPLATE = """
                 }).fail(function() {
                     $('#modal-preview').html('<div class="text-danger">Could not load text content</div>');
                 });
-                // Return early since we are async loading text
                 new bootstrap.Modal('#metaModal').show();
                 return;
             }
@@ -670,6 +670,7 @@ def api_quality():
     aud_stats = {'High (>256k)':0, 'Standard (128k+)':0, 'Low (<128k)':0}
     for r in aud_data:
         try:
+            # Bitrate now likely Int from updated libs, but safe check strings
             val = str(r[0]).lower()
             if not val or val == 'none': continue
             val = val.replace('bps','').replace('kb/s','000').replace('k','000').strip()
@@ -710,11 +711,13 @@ def api_files():
     params = []
     
     if search:
-        where.append("(NORM_PATH(fpi.original_relative_path) LIKE ? OR mc.file_type_group LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        # UPDATED SEARCH LOGIC: Include metadata
+        where.append("(NORM_PATH(fpi.original_relative_path) LIKE ? OR mc.file_type_group LIKE ? OR mc.extended_metadata LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     
     if f_type == 'folder' and f_val:
         clean_val = f_val.replace('\\', '/')
+        # FIXED: Logic moved out of f-string
         param_val = f"{clean_val}/%" 
         where.append("NORM_PATH(fpi.original_relative_path) LIKE ?")
         params.append(param_val)
@@ -746,9 +749,6 @@ def api_files():
             elif 'Low' in criteria: where.append("(mc.width * mc.height) < 2000000")
         elif cat == 'aud':
             # Bitrate logic
-            # Note: Stored in DB as raw int or string? Current libs return INT.
-            # Assuming DB has raw ints. If string, SQL cast needed: CAST(mc.bitrate AS INTEGER)
-            # Just in case, we do simple check (sqlite is loose types)
             if 'High' in criteria: where.append("mc.bitrate >= 256000")
             elif 'Standard' in criteria: where.append("mc.bitrate >= 128000 AND mc.bitrate < 256000")
             elif 'Low' in criteria: where.append("mc.bitrate < 128000")
