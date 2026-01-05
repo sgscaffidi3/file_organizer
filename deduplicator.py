@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: deduplicator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 8
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Deduplicator class, handling primary copy selection (F06) and path calculation (F05).",
     "Updated _select_primary_copy to return a tuple (path, file_id) to support final path naming.",
@@ -15,10 +15,11 @@ _CHANGELOG_ENTRIES = [
     "UX: Added TQDM progress bar for deduplication feedback.",
     "PERFORMANCE: Rewrote Deduplicator to use Batch Processing (Vectorization) instead of iterative DB calls. Speed improvement ~100x.",
     "FEATURE: Added support for 'rename_on_copy' config. If False, preserves original filename unless collision occurs.",
-    "BUG FIX: Changed date fallback logic. If date_best is missing, use file_system_date (date_modified) instead of Today/2026."
+    "BUG FIX: Changed date fallback logic. If date_best is missing, use file_system_date (date_modified) instead of Today/2026.",
+    "FIX: Added missing 'import sys' to support clean exit for version check."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.7.13
+# Version: 0.8.14
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Set
@@ -26,6 +27,7 @@ import os
 import argparse
 import datetime
 import re
+import sys
 from tqdm import tqdm
 
 import config
@@ -54,7 +56,7 @@ class Deduplicator:
             return None
         try:
             # Handle YYYY-MM-DD HH:MM:SS
-            return datetime.datetime.strptime(date_best_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
+            return datetime.datetime.strptime(date_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
         except:
             try:
                 # Handle YYYY-MM-DD
@@ -182,7 +184,6 @@ class Deduplicator:
 
 
 if __name__ == "__main__":
-    manager = ConfigManager()
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
     parser.add_argument('--dedupe', action='store_true')
@@ -193,6 +194,7 @@ if __name__ == "__main__":
         print_version_info(__file__, "Deduplicator and Path Calculator")
         sys.exit(0)
     elif args.dedupe:
+        manager = ConfigManager()
         db_path = manager.OUTPUT_DIR / 'metadata.sqlite'
         with DatabaseManager(db_path) as db:
             processor = Deduplicator(db, manager)

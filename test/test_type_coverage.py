@@ -146,4 +146,14 @@ class TestTypeCoverage(unittest.TestCase):
     def test_fmt_opus(self): self._test_with_mock("opus", "Duration", {})
 
 if __name__ == "__main__":
-    unittest.main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-v', '--version', action='store_true')
+    args, unknown = parser.parse_known_args()
+    
+    if args.version:
+        from version_util import print_version_info
+        print_version_info(__file__, "Type Coverage Tests")
+        sys.exit(0)
+        
+    unittest.main(argv=[sys.argv[0]] + unknown)

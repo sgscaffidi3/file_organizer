@@ -123,6 +123,15 @@ if __name__ == '__main__':
     parser.add_argument('--gen_test_data', action='store_true')
     parser.add_argument('-v', '--version', action='store_true')
     args, unknown = parser.parse_known_args()
+    
+    if args.version:
+        try:
+            from version_util import print_version_info
+            print_version_info(__file__, "Metadata Processor Tests")
+        except:
+            print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        sys.exit(0)
+
     if args.gen_test_data:
         generate_test_data(); sys.exit(0)
     unittest.main(argv=[sys.argv[0]] + unknown)

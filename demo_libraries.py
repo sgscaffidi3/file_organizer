@@ -87,7 +87,7 @@ def run_demo():
 
     # --- RESTORED VERSION SUPPORT ---
     if args.version:
-        print(f"Demo Libraries v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)
 
     DEMO_OUTPUT_DIR.mkdir(exist_ok=True)

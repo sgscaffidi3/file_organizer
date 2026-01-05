@@ -2,7 +2,7 @@
 # File: report_generator.py
 # ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 4
 _CHANGELOG_ENTRIES = [
     "Initial implementation of ReportGenerator class.",
     "Refactored for database-agnostic reporting using DatabaseManager.",
@@ -17,10 +17,11 @@ _CHANGELOG_ENTRIES = [
     "UPDATE: Refactored Duplicate Audit to show top 10 largest (with --verbose toggle).",
     "FEATURE: Added Extraction Spot-Check for largest file of each type.",
     "FIX: Corrected get_top_duplicates query to use COUNT(*) instead of non-existent fpi.id.",
-    "FIX: Added null-checks for extended_metadata in get_audio_summary to prevent TypeError."
+    "FIX: Added null-checks for extended_metadata in get_audio_summary to prevent TypeError.",
+    "FIX: CLI Version check now exits before attempting to connect to the database (resolves OperationalError)."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.3.14
+# Version: 0.4.15
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List

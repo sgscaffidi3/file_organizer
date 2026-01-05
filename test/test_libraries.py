@@ -139,3 +139,19 @@ class TestLibrariesHelper(unittest.TestCase):
             
         except subprocess.CalledProcessError as e:
             self.fail(f"Subprocess failed with error code {e.returncode}. Stderr: {e.stderr}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-v', '--version', action='store_true')
+    args, unknown = parser.parse_known_args()
+    
+    if args.version:
+        # Fallback if version_util not in path
+        try:
+            from version_util import print_version_info
+            print_version_info(__file__, "Libraries Tests")
+        except:
+            print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        sys.exit(0)
+        
+    unittest.main(argv=[sys.argv[0]] + unknown)

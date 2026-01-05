@@ -15,7 +15,7 @@
         "DOCUMENT": [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".epub", ".mobi", ".rtf", ".md"]
     },
     "ffmpeg": {
-        "binary_path": null,
+        "binary_path": "C:/crap/newbins/FFMPEG/static",
         "video_codec": "libx264",
         "audio_codec": "aac",
         "preset": "ultrafast",

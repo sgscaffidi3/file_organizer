@@ -28,7 +28,7 @@ from version_util import print_version_info
 from config_manager import ConfigManager 
 
 # --- Execution Settings ---
-DRY_RUN_MODE = True           # If True, no files are copied/moved/deleted (N03).
+DRY_RUN_MODE = False           # If True, no files are copied/moved/deleted (N03).
 BLOCK_SIZE = 1048576          # Chunk size (1MB).
 
 # --- Threading Configuration ---

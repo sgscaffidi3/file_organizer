@@ -96,5 +96,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.version:
-        print(f"Base Assets v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)

@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 9
+_MINOR_VERSION = 10
 _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class (F04).",
     "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
@@ -13,16 +13,18 @@ _CHANGELOG_ENTRIES = [
     "BUG FIX: Updated _get_files_to_process query to prevent infinite re-processing of Audio/Docs.",
     "PERFORMANCE: Implemented Multithreaded Metadata Extraction using ThreadPoolExecutor.",
     "PERFORMANCE: Implemented Batch Database Writes (1000/batch) to fix SQLite locking issues.",
-    "DATA SAFETY: Modified SQL UPDATE to use COALESCE, preventing NULL dates from overwriting valid file system dates."
+    "DATA SAFETY: Modified SQL UPDATE to use COALESCE, preventing NULL dates from overwriting valid file system dates.",
+    "FIX: Added missing 'import argparse' to support clean exit for version check."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.9.11
+# Version: 0.10.12
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
 import sys
 import concurrent.futures
 import os
+import argparse
 from tqdm import tqdm
 
 from database_manager import DatabaseManager
@@ -148,7 +150,6 @@ class MetadataProcessor:
             print(f"Batch Write Failed: {e}")
 
 if __name__ == "__main__":
-    manager = ConfigManager()
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
     parser.add_argument('--process', action='store_true')
@@ -159,6 +160,7 @@ if __name__ == "__main__":
         print_version_info(__file__, "Metadata Processor")
         sys.exit(0)
     elif args.process:
+        manager = ConfigManager()
         db_path = manager.OUTPUT_DIR / 'metadata.sqlite'
         with DatabaseManager(db_path) as db:
             MetadataProcessor(db, manager).process_metadata()

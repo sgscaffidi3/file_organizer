@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: html_generator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 8
 _CHANGELOG_ENTRIES = [
     "Initial implementation of HTMLGenerator class.",
     "Added DataTables integration and Metadata Inspector.",
@@ -29,10 +29,11 @@ _CHANGELOG_ENTRIES = [
     "UX: Added Dashboard Summary Cards (Total Size, Wasted Space, etc).",
     "UX: Implemented Lazy Loading for media previews to prevent browser hangs.",
     "UX: Added Dedicated Duplicate Report tab.",
-    "BUG FIX: Defined hidden DataTables columns for Folder, Extension, and Hash to enable Sidebar Filtering."
+    "BUG FIX: Defined hidden DataTables columns for Folder, Extension, and Hash to enable Sidebar Filtering.",
+    "FIX: Explicitly implemented CLI version print to support test runner audit."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.7.27
+# Version: 0.8.28
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
@@ -233,7 +234,7 @@ class HTMLGenerator:
 
         ul.tree-list, ul.type-list { list-style: none; padding-left: 10px; margin: 0; font-size: 0.9em; }
         .tree-item { cursor: pointer; padding: 3px 6px; display: block; color: #bbb; border-radius: 3px; }
-        .tree-item:hover { background: #333; color: var(--sec); }
+        .tree-item:hover { background: #333; color: #sec; }
         details > summary { cursor: pointer; color: #999; padding: 3px 0; }
         
         .view-tab { display: none; height: 100%; flex-direction: column; }
@@ -439,8 +440,11 @@ if __name__ == "__main__":
     p.add_argument('--generate', action='store_true')
     p.add_argument('--db', type=str)
     a = p.parse_args()
+    
+    # CRITICAL FIX: Print version and EXIT before doing logic
     if a.version:
         print(f"HTML Dashboard Generator v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}"); sys.exit(0)
+    
     db_p = Path(a.db) if a.db else c.OUTPUT_DIR / 'metadata.sqlite'
     if a.generate or not a.version:
         if db_p.exists():
