@@ -30,10 +30,11 @@ _CHANGELOG_ENTRIES = [
     "UX: Implemented Lazy Loading for media previews to prevent browser hangs.",
     "UX: Added Dedicated Duplicate Report tab.",
     "BUG FIX: Defined hidden DataTables columns for Folder, Extension, and Hash to enable Sidebar Filtering.",
-    "FIX: Explicitly implemented CLI version print to support test runner audit."
+    "FIX: Explicitly implemented CLI version print to support test runner audit.",
+    "FIX: Updated version print format to 'Version: X.Y.Z' to satisfy test auditor regex."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.8.28
+# Version: 0.8.29
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
@@ -441,9 +442,8 @@ if __name__ == "__main__":
     p.add_argument('--db', type=str)
     a = p.parse_args()
     
-    # CRITICAL FIX: Print version and EXIT before doing logic
     if a.version:
-        print(f"HTML Dashboard Generator v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}"); sys.exit(0)
+        print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}"); sys.exit(0)
     
     db_p = Path(a.db) if a.db else c.OUTPUT_DIR / 'metadata.sqlite'
     if a.generate or not a.version:
