@@ -18,10 +18,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added Extraction Spot-Check for largest file of each type.",
     "FIX: Corrected get_top_duplicates query to use COUNT(*) instead of non-existent fpi.id.",
     "FIX: Added null-checks for extended_metadata in get_audio_summary to prevent TypeError.",
-    "FIX: CLI Version check now exits before attempting to connect to the database (resolves OperationalError)."
+    "FIX: CLI Version check now exits before attempting to connect to the database (resolves OperationalError).",
+    "FIX: Reordered __main__ block to ensure clean version exit without DB errors."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.15
+# Version: 0.4.16
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List
@@ -243,13 +244,13 @@ class ReportGenerator:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-v', '--verbose', action='store_true', help="Print all duplicates instead of top 10")
-    parser.add_argument('--version', action='store_true')
+    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('-vdb', '--verbose', action='store_true', help="Print all duplicates instead of top 10")
     parser.add_argument('--db', type=str, default="demo/metadata.sqlite")
     args = parser.parse_args()
     
     if args.version:
-        print(f"Report Generator v{_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+        print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)
         
     db = DatabaseManager(args.db)
