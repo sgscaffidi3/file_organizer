@@ -22,10 +22,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added 'test_migrator' to the test suite and updated version audit list.",
     "FEATURE: Added 'test_type_coverage' to the test suite (TDD Red Phase).",
     "FEATURE: Implemented Log File Output. Tests now write to 'test_run.log' in addition to console.",
-    "UX: Changed log file extension to .txt for easier sharing."
+    "UX: Changed log file extension to .txt for easier sharing.",
+    "FIX: Moved version check argument parsing before logging setup to prevent sys.unraisablehook error."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.20
+# Version: 0.4.21
 # ------------------------------------------------------------------------------
 import subprocess
 from pathlib import Path
@@ -339,30 +340,32 @@ if __name__ == '__main__':
     if str(project_root) not in sys.path:
         sys.path.append(str(project_root)) 
 
-    # SETUP LOGGING
-    log_file_path = project_root / "test_run.log.txt"
-    log_file = open(log_file_path, "w", encoding="utf-8")
+    # SETUP ARGS FIRST - Critical for clean version check
+    parser = argparse.ArgumentParser(description="Test Runner")
+    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--get_versions', action='store_true')
+    args = parser.parse_args()
+
+    if args.version:
+        from version_util import print_version_info
+        print_version_info(__file__, "Test Runner")
+        sys.exit(0)
     
-    # Redirect streams to Tee (writes to console AND file)
-    sys.stdout = Tee(sys.stdout, log_file)
-    sys.stderr = Tee(sys.stderr, log_file)
+    if args.get_versions:
+        # Run check immediately without logging overhead
+        execute_version_check()
+    else:
+        # SETUP LOGGING only when running actual tests
+        log_file_path = project_root / "test_run.log.txt"
+        log_file = open(log_file_path, "w", encoding="utf-8")
+        
+        # Redirect streams to Tee (writes to console AND file)
+        sys.stdout = Tee(sys.stdout, log_file)
+        sys.stderr = Tee(sys.stderr, log_file)
 
-    try:
-        parser = argparse.ArgumentParser(description="Test Runner")
-        parser.add_argument('-v', '--version', action='store_true')
-        parser.add_argument('--get_versions', action='store_true')
-        args = parser.parse_args()
-
-        if args.version:
-            from version_util import print_version_info
-            print_version_info(__file__, "Test Runner")
-            sys.exit(0)
-            
-        if args.get_versions:
-            execute_version_check()
-        else:
+        try:
             print(f"Logging test results to: {log_file_path}")
             print(f"Timestamp: {datetime.datetime.now()}")
             run_tests()
-    finally:
-        log_file.close()
+        finally:
+            log_file.close()
