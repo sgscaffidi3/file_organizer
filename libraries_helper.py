@@ -1,9 +1,7 @@
 # ==============================================================================
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 9
-# ------------------------------------------------------------------------------
-# CHANGELOG:
+_MINOR_VERSION = 10
 _CHANGELOG_ENTRIES = [
     "Initial creation of libraries_helper to encapsulate external library interactions.",
     "Added utility for reporting installed library versions.",
@@ -31,10 +29,11 @@ _CHANGELOG_ENTRIES = [
     "FIX: Routed RAW images (.NEF, .CR2) to MediaInfo for Metadata. Pillow only reads thumbnails (160x120), MediaInfo reads true dimensions.",
     "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates.",
     "FEATURE: Implemented Deep EXIF Parsing (ExifIFD and GPSIFD) to capture Altitude, Brightness, Bias, and detailed Flash status.",
-    "CRITICAL FIX: Switched RAW Metadata extraction to 'rawpy'. MediaInfo/Pillow often read the embedded thumbnail (160x120). rawpy ensures full sensor dimensions."
+    "CRITICAL FIX: Switched RAW Metadata extraction to 'rawpy'. MediaInfo/Pillow often read the embedded thumbnail (160x120). rawpy ensures full sensor dimensions.",
+    "BUG FIX: Added Duration extraction fallback to 'Video' track. Some containers (MKV/MPEG) only report duration on the stream, not the general container."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.9.28
+# Version: 0.10.29
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -424,6 +423,11 @@ def extract_video_metadata(file_path: Path) -> Dict[str, Any]:
                 if track.width: results["Width"] = int(track.width)
                 if track.height: results["Height"] = int(track.height)
                 results["Frame_Rate"] = track.frame_rate
+                
+                # FALLBACK: If Duration wasn't found in General, check Video track
+                if "Duration" not in results and track.duration:
+                    results["Duration"] = int(track.duration) / 1000.0
+                    
             elif track.track_type == "Image":
                 if track.width: results["Width"] = int(track.width)
                 if track.height: results["Height"] = int(track.height)
