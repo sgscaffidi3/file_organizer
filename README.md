@@ -1,12 +1,54 @@
- python.exe .\CodeStats.py
-2025-12-18 22:06:26.153507 CodeStats.py:CodeStats.__init__() : self.Initialized == False
-2025-12-18 22:06:26.154507 CodeStats.py:CodeStats.__init__() : self.Initialized == True
-2025-12-18 22:06:26.155510 CodeStats.py:<module>.__main__() CodeStats Initialization Status : Success
-2025-12-18 22:06:26.380371 CodeStats.py:<module>.__main__() Number of Python files: 24
-2025-12-18 22:06:26.382372 CodeStats.py:<module>.__main__() Number of class statements: 22
-2025-12-18 22:06:26.383894 CodeStats.py:<module>.__main__() Number of def statements: 130
-2025-12-18 22:06:26.383894 CodeStats.py:<module>.__main__() Number of lines of code: 2667
-2025-12-18 22:06:26.384912 CodeStats.py:<module>.__main__() Avg function size (loc): 20.515384615384615
-2025-12-18 22:06:26.385913 CodeStats.py:<module>.__main__() Avg class size (loc): 121.22727272727273
-2025-12-18 22:06:26.386648 CodeStats.py:<module>.__main__() Avg class size (defs): 5.909090909090909
-(venv) PS C:\sandbox\sgscaffidi3\file_organizer\file_organizer> 
+🗄️ File Organizer
+This is a high-performance Python utility designed to catalog, deduplicate, and organize vast media collections (images, videos, documents). It features a modern Web Dashboard for browsing, inspecting, and managing your files.
+
+🚀 Key Features
+Deduplication: Identifies duplicates using SHA-256 hashing.
+Organization: Sorts files into a YEAR/MONTH folder structure.
+Web Dashboard: A responsive Flask-based UI to browse your library.
+Map View: Visualize GPS-tagged photos on an interactive world map.
+Inspector: View metadata, add User Notes, and check file history.
+Transcoding: Streams MKV, AVI, and HEVC videos to the browser on-the-fly.
+Hardware Acceleration: Supports NVIDIA NVENC for fast video transcoding.
+RAW & HEIC Support: Automatically converts professional formats for browser preview.
+🛠️ Setup & Installation
+1. Prerequisites
+Python 3.8+
+FFmpeg (Required for video transcoding)
+2. Installation
+git clone [Repo URL]
+cd file_organizer
+pip install -r requirements.txt
+3. Configuration
+Edit organizer_config.json to set your paths:
+
+{
+    "paths": {
+        "source_directory": "C:/Your/Media/Source",
+        "output_directory": "./organized_media_output"
+    },
+    "ffmpeg": {
+        "binary_path": "C:/Path/To/ffmpeg/bin/ffmpeg.exe" 
+    }
+}
+If binary_path is null, the system attempts to auto-detect FFmpeg from your system PATH. 🖥️ Usage
+
+Build the Database (The Pipeline) Run the full pipeline to scan, index, and organize your files:
+python main.py --all
+--scan: Indexes files.
+--meta: Extracts metadata (Exif, Codecs, GPS).
+--dedupe: Finds duplicates.
+--migrate: Copies files to the Output Directory.
+Launch the Dashboard Start the web server to browse your organized library:
+python main.py --serve
+Access at: http://127.0.0.1:5000
+Map: Click the "Map" button in the top bar to see your geotagged photos.
+Transcoding: Videos not natively supported by Chrome (AVI, MKV) are transcoded automatically.
+Tip: If you have an NVIDIA GPU, ensure your drivers are installed. The server will auto-detect h264_nvenc.
+🧩 Advanced Features Clean Export If you want to view a "clean" version of the database (showing only the organized files, not the source files), run:
+
+python main.py --serve --db "organized_media_output/clean_index.sqlite"
+User Notes You can add persistent notes to any file via the Inspector (Click the (i) button). Notes are saved to the SQLite database and exported with your library. 🧪 Testing Run the comprehensive test suite to verify your environment:
+
+python test/test_all.py
+ 
+ 
