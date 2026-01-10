@@ -1,6 +1,6 @@
 # ==============================================================================
 # File: doc/README.md
-# Version: 0.3.6
+# Version: 0.1.3
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 # 1. Updated documentation to reflect the new JSON-based configuration.
