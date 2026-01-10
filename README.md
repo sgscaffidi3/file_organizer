@@ -43,8 +43,24 @@ Edit organizer_config.json to set your paths:
         "source_directory": "C:/Your/Media/Source",
         "output_directory": "./organized_media_output"
     },
+    "organization": {
+        "rename_on_copy": false,
+        "date_format": "%Y/%Y-%m-%d",
+        "deduplication_strategy": "KEEP_OLDEST" 
+    },
+    "file_groups": {
+        "IMAGE": [".jpg", ".jpeg", ".png", ".gif", ".tiff", ".bmp", ".webp", ".heic", ".heif", ".raw", ".cr2", ".nef", ".arw", ".dng", ".orf", ".svg"],
+        "VIDEO": [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".3gp", ".webm", ".ts", ".m2ts", ".vob", ".mpg", ".mpeg", ".flv", ".f4v", ".mxf"],
+        "AUDIO": [".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".wma", ".aiff", ".m4b", ".opus"],
+        "DOCUMENT": [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".epub", ".mobi", ".rtf", ".md"]
+    },
     "ffmpeg": {
-        "binary_path": "C:/Path/To/ffmpeg/bin/ffmpeg.exe" 
+        "binary_path": "C:/crap/newbins/FFMPEG/static",
+        "video_codec": "libx264",
+        "audio_codec": "aac",
+        "preset": "ultrafast",
+        "crf": "23",
+        "extra_args": []
     }
 }
 ```
