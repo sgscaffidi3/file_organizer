@@ -64,6 +64,7 @@ Start the web server to browse your organized library:
 ```bash
 python main.py --serve
 Access at: http://127.0.0.1:5000
+Note: Also Accessible from other machines on your LAN, at http://your.ip.v4.address:5000
 Map: Click the "Map" button in the top bar to see your geotagged photos.
 Transcoding: Videos not natively supported by Chrome (AVI, MKV) are transcoded automatically.
 Tip: If you have an NVIDIA GPU, ensure your drivers are installed. The server will auto-detect h264_nvenc.
@@ -73,6 +74,11 @@ Clean Export
 If you want to view a "clean" version of the database (showing only the organized files, not the source files), run:
 ```bash
 python main.py --serve --db "organized_media_output/clean_index.sqlite"
+```
+Dry-Run Summary
+If you want to view a complete version of the database (showing all the source files), run:
+```bash
+python main.py --serve --db "organized_media_output/metadata.sqlite"
 ```
 User Notes
 You can add persistent notes to any file via the Inspector (Click the (i) button). Notes are saved to the SQLite database and exported with your library.
