@@ -81,8 +81,8 @@ If you want to view a complete version of the database (showing all the source f
 python main.py --serve --db "organized_media_output/metadata.sqlite"
 ```
 User Notes
-You can add persistent notes to any file via the Inspector (Click the (i) button). Notes are saved to the SQLite database and exported with your library.
-```
+You can add persistent notes to any file via the Inspector
+```(Click the (i) button). Notes are saved to the SQLite database and exported with your library.
 ```
 🧪 Testing:
 Run the comprehensive test suite to verify your environment:
