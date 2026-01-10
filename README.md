@@ -70,7 +70,7 @@ Transcoding: Videos not natively supported by Chrome (AVI, MKV) are transcoded a
 Tip: If you have an NVIDIA GPU, ensure your drivers are installed. The server will auto-detect h264_nvenc.
 ```
 🧩 Advanced Features
-Clean Export
+Clean Export:
 If you want to view a "clean" version of the database (showing only the organized files, not the source files), run:
 ```bash
 python main.py --serve --db "organized_media_output/clean_index.sqlite"
@@ -82,7 +82,9 @@ python main.py --serve --db "organized_media_output/metadata.sqlite"
 ```
 User Notes
 You can add persistent notes to any file via the Inspector (Click the (i) button). Notes are saved to the SQLite database and exported with your library.
-🧪 Testing
+```
+```
+🧪 Testing:
 Run the comprehensive test suite to verify your environment:
 ```bash
 python test/test_all.py
