@@ -30,10 +30,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates.",
     "FEATURE: Implemented Deep EXIF Parsing (ExifIFD and GPSIFD) to capture Altitude, Brightness, Bias, and detailed Flash status.",
     "CRITICAL FIX: Switched RAW Metadata extraction to 'rawpy'. MediaInfo/Pillow often read the embedded thumbnail (160x120). rawpy ensures full sensor dimensions.",
-    "BUG FIX: Added Duration extraction fallback to 'Video' track. Some containers (MKV/MPEG) only report duration on the stream, not the general container."
+    "BUG FIX: Added Duration extraction fallback to 'Video' track. Some containers (MKV/MPEG) only report duration on the stream, not the general container.",
+    "FIX: Added .tif extension to image routing list to ensure Pillow extraction."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.29
+# Version: 0.10.30
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -360,7 +361,7 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
     ext = file_path.suffix.lower()
     specialized_meta = {}
     
-    img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
+    img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp']
     raw_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf']
 
     if ext in ['.heic', '.heif']:
