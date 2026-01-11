@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 11
+_MINOR_VERSION = 13
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -67,10 +67,12 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added /api/update_notes endpoint to write User Notes into JSON metadata.",
     "FEATURE: Added /api/export_db endpoint to download the SQLite database.",
     "PERFORMANCE: Implemented Auto-Detection for NVIDIA GPU (h264_nvenc).",
-    "PERFORMANCE: Added adaptive transcoding logic to swap 'libx264' with 'h264_nvenc' and adjust flags (crf->cq, preset->p1) automatically."
+    "PERFORMANCE: Added adaptive transcoding logic to swap 'libx264' with 'h264_nvenc' and adjust flags (crf->cq, preset->p1) automatically.",
+    "UX: Added automatic LAN IP detection to print the actual network URL on startup.",
+    "FEATURE: Added On-the-Fly TIFF to JPEG conversion to allow .tif/.tiff previews in browser."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.11.67
+# Version: 0.13.67
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -82,6 +84,7 @@ import io
 import subprocess
 import shutil
 import threading
+import socket
 from pathlib import Path
 from collections import defaultdict
 from flask import Flask, render_template, request, jsonify, send_file, abort, Response, stream_with_context
@@ -139,6 +142,19 @@ def format_size(size_bytes):
         if size_bytes < 1024: return f"{size_bytes:.2f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.2f} PB"
+
+def get_local_ip():
+    """Attempts to determine the primary LAN IP address."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
 
 def check_hardware_acceleration(binary, cwd):
     """Checks if NVENC is available in the FFmpeg build."""
@@ -428,7 +444,6 @@ def api_update_notes():
     
     conn = get_db()
     try:
-        # 1. Get Content Hash and Current Metadata
         row = conn.execute("SELECT mc.content_hash, mc.extended_metadata FROM FilePathInstances fpi JOIN MediaContent mc ON fpi.content_hash = mc.content_hash WHERE fpi.file_id = ?", (file_id,)).fetchone()
         
         if not row:
@@ -440,11 +455,9 @@ def api_update_notes():
         except:
             meta = {}
             
-        # 2. Update Metadata
         meta['User_Notes'] = notes
         new_meta_str = json.dumps(meta, indent=4)
         
-        # 3. Write Back
         conn.execute("UPDATE MediaContent SET extended_metadata = ? WHERE content_hash = ?", (new_meta_str, c_hash))
         conn.commit()
         
@@ -593,11 +606,11 @@ def serve(id):
         ext = path.suffix.lower()
         
         # RAW Conversion
-        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif']:
+        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif', '.tif', '.tiff']:
             print(f"[Media] Processing {ext} file: {path.name}")
             
             # 1. Try Rawpy (High Quality) for RAWs
-            if rawpy and ext not in ['.heic', '.heif']:
+            if rawpy and ext not in ['.heic', '.heif', '.tif', '.tiff']:
                 try:
                     with rawpy.imread(str(path)) as raw:
                         rgb = raw.postprocess(use_camera_wb=True)
@@ -611,7 +624,7 @@ def serve(id):
                 except Exception as e:
                     print(f"[Rawpy] Failed: {e}")
 
-            # 2. Try Pillow (Thumbnail or HEIC)
+            # 2. Try Pillow (Thumbnail or HEIC or TIFF)
             if Image:
                 try:
                     img = Image.open(path)
@@ -671,7 +684,7 @@ def api_report():
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1000000
+        mp = (w * h) / 1_000_000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
@@ -765,6 +778,8 @@ def run_server(config_manager):
             print("⚠️ FFmpeg found but FFprobe not found. Codec detection disabled.")
 
     print(f"Starting Dashboard on http://127.0.0.1:5000")
+    local_ip = get_local_ip()
+    print(f"LAN Access: http://{local_ip}:5000")
     print(f"Database: {DB_PATH}")
     
     if FFMPEG_BINARY:
