@@ -18,10 +18,11 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added Perceptual Hash (dhash) calculation to the processing loop for Images.",
     "RELIABILITY: Reduced DB_BATCH_SIZE to 50 and added KeyboardInterrupt handler for better resumability.",
     "CRITICAL FIX: Explicitly handle failed hash calculations by setting perceptual_hash to 'UNKNOWN' instead of NULL, preventing infinite processing loops.",
-    "UX: Added startup stats to show Total vs Remaining files."
+    "UX: Added startup stats to show Total vs Remaining files.",
+    "UX: Added 'flush=True' to print statements to ensure immediate visibility."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.13.16
+# Version: 0.13.17
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
@@ -89,7 +90,6 @@ class MetadataProcessor:
                 asset = ImageAsset(path, raw_meta)
                 p_hash = calculate_image_hash(path)
                 # CRITICAL FIX: If hashing fails (missing lib or corrupt file), set a sentinel
-                # so we don't try to process this file forever.
                 if p_hash is None:
                     p_hash = "UNKNOWN"
             elif group == 'AUDIO': 
@@ -114,24 +114,24 @@ class MetadataProcessor:
             return None
 
     def process_metadata(self):
-        print("Scanning database for unprocessed files...")
+        print("Scanning database for unprocessed files...", flush=True)
         records = self._get_files_to_process()
         
         # Get total count for context
         total_assets = self.db.execute_query("SELECT COUNT(*) FROM MediaContent")[0][0]
         completed = total_assets - len(records)
         
-        print("-" * 60)
-        print(f" Total Assets:     {total_assets}")
-        print(f" Already Done:     {completed}")
-        print(f" Left to Process:  {len(records)}")
-        print("-" * 60)
+        print("-" * 60, flush=True)
+        print(f" Total Assets:     {total_assets}", flush=True)
+        print(f" Already Done:     {completed}", flush=True)
+        print(f" Left to Process:  {len(records)}", flush=True)
+        print("-" * 60, flush=True)
         
         if not records:
-            print("✅ Metadata is up to date.")
+            print("✅ Metadata is up to date.", flush=True)
             return
 
-        print(f"Spinning up {config.METADATA_THREADS} threads (Batch Size: {DB_BATCH_SIZE})...")
+        print(f"Spinning up {config.METADATA_THREADS} threads (Batch Size: {DB_BATCH_SIZE})...", flush=True)
         
         batch_updates = []
         
@@ -163,15 +163,15 @@ class MetadataProcessor:
                     self._flush_batch(batch_updates)
 
         except KeyboardInterrupt:
-            print("\n\n🛑 User Interrupted! Saving pending batch...")
+            print("\n\n🛑 User Interrupted! Saving pending batch...", flush=True)
             if batch_updates:
                 self._flush_batch(batch_updates)
-                print(f"✅ Saved {len(batch_updates)} records. You can resume later.")
+                print(f"✅ Saved {len(batch_updates)} records. You can resume later.", flush=True)
             else:
-                print("No pending records to save.")
+                print("No pending records to save.", flush=True)
             sys.exit(0)
                 
-        print(f"Metadata processing complete. Updated {self.processed_count} records.")
+        print(f"Metadata processing complete. Updated {self.processed_count} records.", flush=True)
 
     def _flush_batch(self, data):
         """Executes a batch update. Uses COALESCE to protect existing dates."""
