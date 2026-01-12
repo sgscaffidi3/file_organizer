@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 10
+_MINOR_VERSION = 11
 _CHANGELOG_ENTRIES = [
     "Initial creation of libraries_helper to encapsulate external library interactions.",
     "Added utility for reporting installed library versions.",
@@ -30,10 +30,12 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates.",
     "FEATURE: Implemented Deep EXIF Parsing (ExifIFD and GPSIFD) to capture Altitude, Brightness, Bias, and detailed Flash status.",
     "CRITICAL FIX: Switched RAW Metadata extraction to 'rawpy'. MediaInfo/Pillow often read the embedded thumbnail (160x120). rawpy ensures full sensor dimensions.",
-    "BUG FIX: Added Duration extraction fallback to 'Video' track. Some containers (MKV/MPEG) only report duration on the stream, not the general container."
+    "BUG FIX: Added Duration extraction fallback to 'Video' track. Some containers (MKV/MPEG) only report duration on the stream, not the general container.",
+    "FIX: Added .tif extension to image routing list to ensure Pillow extraction.",
+    "FEATURE: Added 'calculate_image_hash' using ImageHash (dhash) for near-duplicate detection."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.29
+# Version: 0.11.31
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -64,6 +66,12 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
     HEIC_AVAILABLE = False
+
+try:
+    import imagehash
+    IMAGEHASH_AVAILABLE = True
+except ImportError:
+    IMAGEHASH_AVAILABLE = False
 
 try:
     import rawpy
@@ -110,7 +118,7 @@ except ImportError:
 # --- Version Reporting ---
 def get_library_versions():
     """Returns a dictionary of relevant library versions for the project."""
-    libs = ['tqdm', 'Pillow', 'pillow-heif', 'pymediainfo', 'rawpy', 'PyPDF2', 'python-docx', 'python-pptx', 'openpyxl', 'EbookLib']
+    libs = ['tqdm', 'Pillow', 'pillow-heif', 'pymediainfo', 'rawpy', 'PyPDF2', 'python-docx', 'python-pptx', 'openpyxl', 'EbookLib', 'ImageHash']
     versions = {}
     for lib in libs:
         try:
@@ -143,6 +151,25 @@ def _parse_flash(val):
         return "Flash fired" if (v & 1) else "Flash did not fire"
     except:
         return str(val)
+
+# --- Perceptual Hashing ---
+def calculate_image_hash(file_path: Path) -> Optional[str]:
+    """
+    Calculates the dhash (difference hash) of an image for near-duplicate detection.
+    Returns the hash as a hexadecimal string.
+    """
+    if not IMAGEHASH_AVAILABLE or not PIL_AVAILABLE:
+        return None
+    
+    try:
+        with Image.open(file_path) as img:
+            # dhash is generally best for detecting resizes/modifications
+            h = imagehash.dhash(img)
+            return str(h)
+    except Exception:
+        # Fallback for RAW/HEIC if Pillow can't open directly (though register_heif_opener should handle HEIC)
+        # For RAW, we might need rawpy, but imagehash expects a PIL Image.
+        return None
 
 # --- Specialized Extractors ---
 
@@ -360,7 +387,7 @@ def get_video_metadata(file_path: Path, verbose: bool = False) -> Dict[str, Any]
     ext = file_path.suffix.lower()
     specialized_meta = {}
     
-    img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
+    img_exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp']
     raw_exts = ['.cr2', '.nef', '.arw', '.dng', '.orf']
 
     if ext in ['.heic', '.heif']:
