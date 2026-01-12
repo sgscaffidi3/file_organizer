@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 11
+_MINOR_VERSION = 12
 _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class (F04).",
     "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
@@ -15,10 +15,11 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Implemented Batch Database Writes (1000/batch) to fix SQLite locking issues.",
     "DATA SAFETY: Modified SQL UPDATE to use COALESCE, preventing NULL dates from overwriting valid file system dates.",
     "FIX: Added missing 'import argparse' to support clean exit for version check.",
-    "FEATURE: Added Perceptual Hash (dhash) calculation to the processing loop for Images."
+    "FEATURE: Added Perceptual Hash (dhash) calculation to the processing loop for Images.",
+    "RELIABILITY: Reduced DB_BATCH_SIZE to 50 and added KeyboardInterrupt handler for better resumability."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.11.13
+# Version: 0.12.14
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
@@ -33,7 +34,8 @@ from config_manager import ConfigManager
 from asset_manager import AssetManager
 import config
 
-DB_BATCH_SIZE = 1000
+# LOWERED BATCH SIZE: Saves progress more frequently (every ~50 files)
+DB_BATCH_SIZE = 50
 
 class MetadataProcessor:
     """Processes MediaContent records missing metadata using multithreading and batch commits."""
@@ -74,6 +76,7 @@ class MetadataProcessor:
             from video_asset import VideoAsset
             from base_assets import GenericFileAsset, AudioAsset, ImageAsset, DocumentAsset
             
+            # Note: We re-extract metadata here. Ideally in future we only extract what is missing.
             raw_meta = get_video_metadata(path, verbose=False)
             
             p_hash = None
@@ -112,40 +115,53 @@ class MetadataProcessor:
 
         print(f"Processing metadata for {len(records)} files...")
         print(f"Threads: {config.METADATA_THREADS}")
+        print(f"Batch Size: {DB_BATCH_SIZE}")
         
         batch_updates = []
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=config.METADATA_THREADS) as executor:
-            future_to_hash = {executor.submit(self._process_single_file, r): r[0] for r in records}
-            
-            with tqdm(total=len(records), desc="Extracting", unit="file") as pbar:
-                for future in concurrent.futures.as_completed(future_to_hash):
-                    pbar.update(1)
-                    try:
-                        result = future.result()
-                        if result:
-                            batch_updates.append(result)
-                            self.processed_count += 1
-                        else:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=config.METADATA_THREADS) as executor:
+                future_to_hash = {executor.submit(self._process_single_file, r): r[0] for r in records}
+                
+                with tqdm(total=len(records), desc="Extracting", unit="file") as pbar:
+                    for future in concurrent.futures.as_completed(future_to_hash):
+                        pbar.update(1)
+                        try:
+                            result = future.result()
+                            if result:
+                                batch_updates.append(result)
+                                self.processed_count += 1
+                            else:
+                                self.skip_count += 1
+                                
+                            if len(batch_updates) >= DB_BATCH_SIZE:
+                                self._flush_batch(batch_updates)
+                                batch_updates.clear()
+                                
+                        except Exception as e:
+                            tqdm.write(f"Error in thread: {e}")
                             self.skip_count += 1
-                            
-                        if len(batch_updates) >= DB_BATCH_SIZE:
-                            self._flush_batch(batch_updates)
-                            batch_updates.clear()
-                            
-                    except Exception as e:
-                        tqdm.write(f"Error in thread: {e}")
-                        self.skip_count += 1
-            
+                
+                # Final flush
+                if batch_updates:
+                    self._flush_batch(batch_updates)
+
+        except KeyboardInterrupt:
+            print("\n\n🛑 User Interrupted! Saving pending batch...")
             if batch_updates:
                 self._flush_batch(batch_updates)
+                print(f"✅ Saved {len(batch_updates)} records. You can resume later.")
+            else:
+                print("No pending records to save.")
+            sys.exit(0)
                 
         print(f"Metadata processing complete. Updated {self.processed_count} records.")
 
     def _flush_batch(self, data):
         """Executes a batch update. Uses COALESCE to protect existing dates."""
+        if not data: return
+        
         # SQLite COALESCE(?, date_best) checks if the new value (?) is NULL.
-        # If it is NULL, it keeps the old value (date_best).
         update_sql = """
         UPDATE MediaContent SET
             date_best = COALESCE(?, date_best), 
