@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 14
+_MINOR_VERSION = 15
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -70,10 +70,11 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Added adaptive transcoding logic to swap 'libx264' with 'h264_nvenc' and adjust flags (crf->cq, preset->p1) automatically.",
     "UX: Added automatic LAN IP detection to print the actual network URL on startup.",
     "FEATURE: Added On-the-Fly TIFF to JPEG conversion to allow .tif/.tiff previews in browser.",
-    "FEATURE: Added /api/visual_dupes endpoint to serve grouped Perceptual Hash matches."
+    "FEATURE: Added /api/visual_dupes endpoint to serve grouped Perceptual Hash matches.",
+    "FIX: Added .tif and .tiff to conversion list (handled by Pillow) to fix broken previews in browser."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.14.68
+# Version: 0.15.69
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -642,11 +643,11 @@ def serve(id):
         ext = path.suffix.lower()
         
         # RAW Conversion
-        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif']:
+        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif', '.tif', '.tiff']:
             print(f"[Media] Processing {ext} file: {path.name}")
             
             # 1. Try Rawpy (High Quality) for RAWs
-            if rawpy and ext not in ['.heic', '.heif']:
+            if rawpy and ext not in ['.heic', '.heif', '.tif', '.tiff']:
                 try:
                     with rawpy.imread(str(path)) as raw:
                         rgb = raw.postprocess(use_camera_wb=True)
@@ -660,7 +661,7 @@ def serve(id):
                 except Exception as e:
                     print(f"[Rawpy] Failed: {e}")
 
-            # 2. Try Pillow (Thumbnail or HEIC)
+            # 2. Try Pillow (Thumbnail or HEIC or TIFF)
             if Image:
                 try:
                     img = Image.open(path)
@@ -720,7 +721,7 @@ def api_report():
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1000000
+        mp = (w * h) / 1_000_000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
