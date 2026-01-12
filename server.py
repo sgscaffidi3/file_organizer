@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 15
+_MINOR_VERSION = 16
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -71,10 +71,11 @@ _CHANGELOG_ENTRIES = [
     "UX: Added automatic LAN IP detection to print the actual network URL on startup.",
     "FEATURE: Added On-the-Fly TIFF to JPEG conversion to allow .tif/.tiff previews in browser.",
     "FEATURE: Added /api/visual_dupes endpoint to serve grouped Perceptual Hash matches.",
-    "FIX: Added .tif and .tiff to conversion list (handled by Pillow) to fix broken previews in browser."
+    "FIX: Added .tif and .tiff to conversion list (handled by Pillow) to fix broken previews in browser.",
+    "CONFIG: Enabled TEMPLATES_AUTO_RELOAD to prevent caching of dashboard UI updates."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.15.69
+# Version: 0.16.70
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -121,6 +122,9 @@ if not template_dir.exists():
     print(f"WARNING: 'templates' directory not found at {template_dir}")
 
 app = Flask(__name__, template_folder=str(template_dir))
+
+# CRITICAL FIX: Ensure UI updates are reflected immediately
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 DB_PATH = None
 CONFIG = None
