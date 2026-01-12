@@ -2,7 +2,7 @@
 # File: report_generator.py
 # ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 6
 _CHANGELOG_ENTRIES = [
     "Initial implementation of ReportGenerator class.",
     "Refactored for database-agnostic reporting using DatabaseManager.",
@@ -21,13 +21,15 @@ _CHANGELOG_ENTRIES = [
     "FIX: CLI Version check now exits before attempting to connect to the database (resolves OperationalError).",
     "FIX: Reordered __main__ block to ensure clean version exit without DB errors.",
     "FEATURE: Added 'Visual Duplicates' report using Perceptual Hash matches.",
-    "UX: Added TQDM progress bars to Visual Duplicate and Extraction Sample queries to prevent 'stuck' appearance."
+    "UX: Added TQDM progress bars to Visual Duplicate and Extraction Sample queries to prevent 'stuck' appearance.",
+    "PERFORMANCE: Replaced N+1 query loop in 'Visual Duplicates' with a single optimized JOIN for instant results."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.18
+# Version: 0.6.19
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List
+from collections import defaultdict
 import argparse
 import datetime
 import sys
@@ -100,27 +102,33 @@ class ReportGenerator:
         
     def get_visual_duplicates(self) -> List[Dict]:
         """Finds images that look the same (Exact Phash Match) but are different files."""
-        print("  > Analyzing visual hashes...")
-        query = """
-        SELECT perceptual_hash, COUNT(*) 
-        FROM MediaContent 
-        WHERE perceptual_hash IS NOT NULL 
-        GROUP BY perceptual_hash 
-        HAVING COUNT(*) > 1
-        """
-        rows = self.db.execute_query(query)
-        results = []
+        print("  > Analyzing visual hashes (Optimized)...")
         
-        # Added Progress Bar
-        for phash, count in tqdm(rows, desc="    Grouping Similar", unit="group", leave=False):
-            # Get details
-            files = self.db.execute_query("""
-                SELECT mc.content_hash, mc.size, fpi.original_relative_path 
-                FROM MediaContent mc
-                JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
-                WHERE mc.perceptual_hash = ? AND fpi.is_primary = 1
-            """, (phash,))
-            results.append({"phash": phash, "count": count, "files": files})
+        # Single Query Strategy: Get all files that belong to a hash group with > 1 member
+        query = """
+        SELECT mc.perceptual_hash, mc.content_hash, mc.size, fpi.original_relative_path 
+        FROM MediaContent mc
+        JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
+        WHERE mc.perceptual_hash IN (
+            SELECT perceptual_hash FROM MediaContent 
+            WHERE perceptual_hash IS NOT NULL 
+            GROUP BY perceptual_hash 
+            HAVING COUNT(*) > 1
+        ) AND fpi.is_primary = 1
+        ORDER BY mc.perceptual_hash
+        """
+        
+        rows = self.db.execute_query(query)
+        
+        # Group in Python
+        grouped = defaultdict(list)
+        for phash, chash, size, path in rows:
+            grouped[phash].append((chash, size, path))
+            
+        results = []
+        for phash, files in grouped.items():
+            results.append({"phash": phash, "count": len(files), "files": files})
+            
         return results
 
     def get_extraction_samples(self) -> List[Dict]:
