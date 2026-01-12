@@ -1,22 +1,23 @@
 # ==============================================================================
 # File: asset_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 1
+_MINOR_VERSION = 2
 _CHANGELOG_ENTRIES = [
     "Initial creation of AssetManager to coordinate asset processing.",
     "Integrated libraries_helper for metadata extraction.",
     "Implemented the Hybrid Metadata storage strategy into the database.",
-    "Added support for --verbose flag to trigger exhaustive MediaInfo scans."
+    "Added support for --verbose flag to trigger exhaustive MediaInfo scans.",
+    "FEATURE: Added calculation of Perceptual Hash (dhash) for IMAGE type assets."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.1.4
+# Version: 0.2.5
 # ------------------------------------------------------------------------------
 from pathlib import Path
 import sys
 import argparse
 import json
 from video_asset import VideoAsset
-from libraries_helper import get_video_metadata
+from libraries_helper import get_video_metadata, calculate_image_hash
 from database_manager import DatabaseManager
 from base_assets import GenericFileAsset, AudioAsset, ImageAsset, DocumentAsset
 
@@ -44,10 +45,15 @@ class AssetManager:
         else:
             asset = GenericFileAsset(file_path, raw_meta)
 
+        # Calculate Perceptual Hash for Images
+        p_hash = None
+        if group == 'IMAGE':
+            p_hash = calculate_image_hash(file_path)
+
         update_sql = """
         UPDATE MediaContent SET
             date_best = ?, width = ?, height = ?, duration = ?,
-            bitrate = ?, video_codec = ?, extended_metadata = ?
+            bitrate = ?, video_codec = ?, perceptual_hash = ?, extended_metadata = ?
         WHERE content_hash = ?;
         """
         # Safely handle attributes that might not exist on all models
@@ -58,6 +64,7 @@ class AssetManager:
             getattr(asset, 'duration', None),
             getattr(asset, 'bitrate', None if group != 'AUDIO' else asset.bitrate),
             getattr(asset, 'video_codec', None),
+            p_hash,
             asset.get_full_json(),
             content_hash
         )
