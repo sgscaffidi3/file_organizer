@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 13
+_MINOR_VERSION = 14
 _CHANGELOG_ENTRIES = [
     "Initial implementation of Flask Server.",
     "Added API endpoints for Statistics, Folder Tree, and File Data.",
@@ -69,10 +69,11 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Implemented Auto-Detection for NVIDIA GPU (h264_nvenc).",
     "PERFORMANCE: Added adaptive transcoding logic to swap 'libx264' with 'h264_nvenc' and adjust flags (crf->cq, preset->p1) automatically.",
     "UX: Added automatic LAN IP detection to print the actual network URL on startup.",
-    "FEATURE: Added On-the-Fly TIFF to JPEG conversion to allow .tif/.tiff previews in browser."
+    "FEATURE: Added On-the-Fly TIFF to JPEG conversion to allow .tif/.tiff previews in browser.",
+    "FEATURE: Added /api/visual_dupes endpoint to serve grouped Perceptual Hash matches."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.13.67
+# Version: 0.14.68
 # ------------------------------------------------------------------------------
 import os
 import json
@@ -435,6 +436,41 @@ def api_map():
         except: continue
     return jsonify(markers)
 
+@app.route('/api/visual_dupes')
+def api_visual_dupes():
+    """Returns grouped visual duplicates (Same Phash)."""
+    conn = get_db()
+    # 1. Get Hash Groups
+    query = """
+    SELECT mc.perceptual_hash, mc.content_hash, mc.size, fpi.file_id, fpi.original_relative_path, mc.file_type_group 
+    FROM MediaContent mc
+    JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
+    WHERE mc.perceptual_hash IN (
+        SELECT perceptual_hash FROM MediaContent 
+        WHERE perceptual_hash IS NOT NULL AND perceptual_hash != 'UNKNOWN'
+        GROUP BY perceptual_hash 
+        HAVING COUNT(*) > 1
+    ) AND fpi.is_primary = 1
+    ORDER BY mc.perceptual_hash
+    """
+    rows = conn.execute(query).fetchall()
+    conn.close()
+    
+    # 2. Group by Phash
+    groups = defaultdict(list)
+    for r in rows:
+        phash = r[0]
+        groups[phash].append({
+            "hash": r[1],
+            "size": format_size(r[2]),
+            "id": r[3],
+            "name": Path(r[4]).name,
+            "path": r[4],
+            "type": r[5]
+        })
+        
+    return jsonify([{"phash": k, "items": v} for k, v in groups.items()])
+
 @app.route('/api/update_notes', methods=['POST'])
 def api_update_notes():
     """Updates the 'User_Notes' field in the extended_metadata JSON blob."""
@@ -606,11 +642,11 @@ def serve(id):
         ext = path.suffix.lower()
         
         # RAW Conversion
-        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif', '.tif', '.tiff']:
+        if ext in ['.cr2', '.nef', '.arw', '.dng', '.orf', '.heic', '.heif']:
             print(f"[Media] Processing {ext} file: {path.name}")
             
             # 1. Try Rawpy (High Quality) for RAWs
-            if rawpy and ext not in ['.heic', '.heif', '.tif', '.tiff']:
+            if rawpy and ext not in ['.heic', '.heif']:
                 try:
                     with rawpy.imread(str(path)) as raw:
                         rgb = raw.postprocess(use_camera_wb=True)
@@ -624,7 +660,7 @@ def serve(id):
                 except Exception as e:
                     print(f"[Rawpy] Failed: {e}")
 
-            # 2. Try Pillow (Thumbnail or HEIC or TIFF)
+            # 2. Try Pillow (Thumbnail or HEIC)
             if Image:
                 try:
                     img = Image.open(path)
@@ -684,7 +720,7 @@ def api_report():
     img_stats = {'Pro (>20 MP)':0, 'High (12-20 MP)':0, 'Standard (2-12 MP)':0, 'Low (<2 MP)':0}
     for w, h in img_data:
         if not w or not h: continue
-        mp = (w * h) / 1_000_000
+        mp = (w * h) / 1000000
         if mp >= 20: img_stats['Pro (>20 MP)'] += 1
         elif mp >= 12: img_stats['High (12-20 MP)'] += 1
         elif mp >= 2: img_stats['Standard (2-12 MP)'] += 1
