@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 7
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
@@ -22,7 +22,8 @@ _CHANGELOG_ENTRIES = [
     "FEATURE: Added dump_database() method and --dump_db CLI option for quick debugging inspection.",
     "SCHEMA MIGRATION: Added auto-detection and creation of 'new_path_id' column if missing (Fixes Deduplicator crash on legacy DBs).",
     "PERFORMANCE: Added Indices for content_hash and is_primary to eliminate full-table scans during deduplication.",
-    "PERFORMANCE: Added execute_many() method to support high-speed batch updates."
+    "PERFORMANCE: Added execute_many() method to support high-speed batch updates.",
+    "SCHEMA MIGRATION: Added 'perceptual_hash' column to MediaContent to support near-duplicate detection."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
@@ -136,13 +137,16 @@ class DatabaseManager:
             duration REAL,
             bitrate INTEGER,
             title TEXT,
-            video_codec TEXT, -- New: Explicit column for codec
+            video_codec TEXT, 
             
-            -- Deduplication
+            -- Deduplication / Organization
             new_path_id TEXT,
             
+            -- Visual Analysis
+            perceptual_hash TEXT,
+            
             -- Hybrid "Backpack" Column
-            extended_metadata TEXT -- New: Stores exhaustive JSON blob
+            extended_metadata TEXT 
         );
         """
         # FilePathInstances: List of all file locations. 
@@ -156,7 +160,7 @@ class DatabaseManager:
             
             -- Metadata derived from file system:
             date_added TEXT DEFAULT (DATETIME('now')), -- Date/time file was first scanned
-            date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), -- CRITICAL FIX: Add date_modified
+            date_modified TEXT NOT NULL DEFAULT (DATETIME('now')), 
             
             -- Deduplication/Organization fields:
             is_primary BOOLEAN DEFAULT 0,
@@ -168,20 +172,27 @@ class DatabaseManager:
         # Indices for Performance
         index_hash_sql = "CREATE INDEX IF NOT EXISTS idx_fpi_content_hash ON FilePathInstances(content_hash);"
         index_primary_sql = "CREATE INDEX IF NOT EXISTS idx_fpi_is_primary ON FilePathInstances(is_primary);"
+        index_phash_sql = "CREATE INDEX IF NOT EXISTS idx_mc_phash ON MediaContent(perceptual_hash);"
         
         try:
             self.conn.execute(content_table_sql)
             self.conn.execute(instance_table_sql)
             
-            # --- MIGRATION: Ensure new_path_id exists (for legacy DBs) ---
+            # --- MIGRATIONS ---
+            # 1. new_path_id
             try:
                 self.conn.execute("ALTER TABLE MediaContent ADD COLUMN new_path_id TEXT;")
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError: pass
+            
+            # 2. perceptual_hash (New for v0.11)
+            try:
+                self.conn.execute("ALTER TABLE MediaContent ADD COLUMN perceptual_hash TEXT;")
+            except sqlite3.OperationalError: pass
                 
             # Create Indices
             self.conn.execute(index_hash_sql)
             self.conn.execute(index_primary_sql)
+            self.conn.execute(index_phash_sql)
                 
             self.conn.commit()
         except sqlite3.Error as e:
