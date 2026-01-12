@@ -2,7 +2,7 @@
 # File: report_generator.py
 # ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation of ReportGenerator class.",
     "Refactored for database-agnostic reporting using DatabaseManager.",
@@ -19,10 +19,11 @@ _CHANGELOG_ENTRIES = [
     "FIX: Corrected get_top_duplicates query to use COUNT(*) instead of non-existent fpi.id.",
     "FIX: Added null-checks for extended_metadata in get_audio_summary to prevent TypeError.",
     "FIX: CLI Version check now exits before attempting to connect to the database (resolves OperationalError).",
-    "FIX: Reordered __main__ block to ensure clean version exit without DB errors."
+    "FIX: Reordered __main__ block to ensure clean version exit without DB errors.",
+    "FEATURE: Added 'Visual Duplicates' report using Perceptual Hash matches."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.4.16
+# Version: 0.5.17
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List
@@ -94,6 +95,28 @@ class ReportGenerator:
                 "paths": [p[0] for p in paths]
             })
         return report
+        
+    def get_visual_duplicates(self) -> List[Dict]:
+        """Finds images that look the same (Exact Phash Match) but are different files."""
+        query = """
+        SELECT perceptual_hash, COUNT(*) 
+        FROM MediaContent 
+        WHERE perceptual_hash IS NOT NULL 
+        GROUP BY perceptual_hash 
+        HAVING COUNT(*) > 1
+        """
+        rows = self.db.execute_query(query)
+        results = []
+        for phash, count in rows:
+            # Get details
+            files = self.db.execute_query("""
+                SELECT mc.content_hash, mc.size, fpi.original_relative_path 
+                FROM MediaContent mc
+                JOIN FilePathInstances fpi ON mc.content_hash = fpi.content_hash
+                WHERE mc.perceptual_hash = ? AND fpi.is_primary = 1
+            """, (phash,))
+            results.append({"phash": phash, "count": count, "files": files})
+        return results
 
     def get_extraction_samples(self) -> List[Dict]:
         """Gets the largest file of each type to spot-check metadata extraction."""
@@ -228,8 +251,19 @@ class ReportGenerator:
             for item in dupe_list:
                 print(f"  Hash: {item['hash'][:16]}... | Size: {self._format_size(item['size'])}")
                 for p in item['paths']: print(f"    - {p}")
+                
+        # 5. Visual Duplicates
+        print("\n[VISUAL DUPLICATES (Near-Match / Resized)]")
+        vis_dupes = self.get_visual_duplicates()
+        if vis_dupes:
+            for item in vis_dupes[:5]: # Top 5
+                print(f"  Perceptual Hash: {item['phash']} (Count: {item['count']})")
+                for f in item['files']:
+                    print(f"    - {self._format_size(f[1])}: {f[2]}")
+        else:
+            print("  None found (Note: Run --meta to generate Perceptual Hashes)")
 
-        # 5. Extraction Spot-Check
+        # 6. Extraction Spot-Check
         print("\n" + "="*80)
         print(f"{'METADATA EXTRACTION SPOT-CHECK (Largest per Group)':^80}")
         print("="*80)
