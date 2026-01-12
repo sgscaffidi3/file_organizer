@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 12
+_MINOR_VERSION = 13
 _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class (F04).",
     "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
@@ -16,10 +16,12 @@ _CHANGELOG_ENTRIES = [
     "DATA SAFETY: Modified SQL UPDATE to use COALESCE, preventing NULL dates from overwriting valid file system dates.",
     "FIX: Added missing 'import argparse' to support clean exit for version check.",
     "FEATURE: Added Perceptual Hash (dhash) calculation to the processing loop for Images.",
-    "RELIABILITY: Reduced DB_BATCH_SIZE to 50 and added KeyboardInterrupt handler for better resumability."
+    "RELIABILITY: Reduced DB_BATCH_SIZE to 50 and added KeyboardInterrupt handler for better resumability.",
+    "CRITICAL FIX: Explicitly handle failed hash calculations by setting perceptual_hash to 'UNKNOWN' instead of NULL, preventing infinite processing loops.",
+    "UX: Added startup stats to show Total vs Remaining files."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.12.14
+# Version: 0.13.16
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
@@ -86,6 +88,10 @@ class MetadataProcessor:
             elif group == 'IMAGE': 
                 asset = ImageAsset(path, raw_meta)
                 p_hash = calculate_image_hash(path)
+                # CRITICAL FIX: If hashing fails (missing lib or corrupt file), set a sentinel
+                # so we don't try to process this file forever.
+                if p_hash is None:
+                    p_hash = "UNKNOWN"
             elif group == 'AUDIO': 
                 asset = AudioAsset(path, raw_meta)
             elif group == 'DOCUMENT': 
@@ -108,14 +114,24 @@ class MetadataProcessor:
             return None
 
     def process_metadata(self):
+        print("Scanning database for unprocessed files...")
         records = self._get_files_to_process()
+        
+        # Get total count for context
+        total_assets = self.db.execute_query("SELECT COUNT(*) FROM MediaContent")[0][0]
+        completed = total_assets - len(records)
+        
+        print("-" * 60)
+        print(f" Total Assets:     {total_assets}")
+        print(f" Already Done:     {completed}")
+        print(f" Left to Process:  {len(records)}")
+        print("-" * 60)
+        
         if not records:
-            print("No records require metadata processing.")
+            print("✅ Metadata is up to date.")
             return
 
-        print(f"Processing metadata for {len(records)} files...")
-        print(f"Threads: {config.METADATA_THREADS}")
-        print(f"Batch Size: {DB_BATCH_SIZE}")
+        print(f"Spinning up {config.METADATA_THREADS} threads (Batch Size: {DB_BATCH_SIZE})...")
         
         batch_updates = []
         
@@ -123,7 +139,7 @@ class MetadataProcessor:
             with concurrent.futures.ThreadPoolExecutor(max_workers=config.METADATA_THREADS) as executor:
                 future_to_hash = {executor.submit(self._process_single_file, r): r[0] for r in records}
                 
-                with tqdm(total=len(records), desc="Extracting", unit="file") as pbar:
+                with tqdm(total=len(records), desc="Processing", unit="file") as pbar:
                     for future in concurrent.futures.as_completed(future_to_hash):
                         pbar.update(1)
                         try:
