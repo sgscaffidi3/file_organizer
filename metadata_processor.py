@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 10
+_MINOR_VERSION = 11
 _CHANGELOG_ENTRIES = [
     "Initial implementation of MetadataProcessor class (F04).",
     "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
@@ -14,10 +14,11 @@ _CHANGELOG_ENTRIES = [
     "PERFORMANCE: Implemented Multithreaded Metadata Extraction using ThreadPoolExecutor.",
     "PERFORMANCE: Implemented Batch Database Writes (1000/batch) to fix SQLite locking issues.",
     "DATA SAFETY: Modified SQL UPDATE to use COALESCE, preventing NULL dates from overwriting valid file system dates.",
-    "FIX: Added missing 'import argparse' to support clean exit for version check."
+    "FIX: Added missing 'import argparse' to support clean exit for version check.",
+    "FEATURE: Added Perceptual Hash (dhash) calculation to the processing loop for Images."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.10.12
+# Version: 0.11.13
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import List, Tuple
@@ -43,12 +44,15 @@ class MetadataProcessor:
         self.skip_count = 0
 
     def _get_files_to_process(self) -> List[Tuple[str, str, str]]:
+        # Updated Query: Also check for missing perceptual_hash in Images
         query = """
         SELECT T1.content_hash, T1.file_type_group, T2.original_full_path
         FROM MediaContent T1
         INNER JOIN FilePathInstances T2 ON T1.content_hash = T2.content_hash AND T2.is_primary = 1
         WHERE 
            (T1.file_type_group IN ('IMAGE', 'VIDEO') AND (T1.width IS NULL OR T1.height IS NULL))
+           OR
+           (T1.file_type_group = 'IMAGE' AND T1.perceptual_hash IS NULL)
            OR
            (T1.file_type_group = 'AUDIO' AND T1.duration IS NULL)
            OR
@@ -66,17 +70,25 @@ class MetadataProcessor:
             return None
             
         try:
-            from libraries_helper import get_video_metadata
+            from libraries_helper import get_video_metadata, calculate_image_hash
             from video_asset import VideoAsset
             from base_assets import GenericFileAsset, AudioAsset, ImageAsset, DocumentAsset
             
             raw_meta = get_video_metadata(path, verbose=False)
             
-            if group == 'VIDEO': asset = VideoAsset(path, raw_meta)
-            elif group == 'IMAGE': asset = ImageAsset(path, raw_meta)
-            elif group == 'AUDIO': asset = AudioAsset(path, raw_meta)
-            elif group == 'DOCUMENT': asset = DocumentAsset(path, raw_meta)
-            else: asset = GenericFileAsset(path, raw_meta)
+            p_hash = None
+            
+            if group == 'VIDEO': 
+                asset = VideoAsset(path, raw_meta)
+            elif group == 'IMAGE': 
+                asset = ImageAsset(path, raw_meta)
+                p_hash = calculate_image_hash(path)
+            elif group == 'AUDIO': 
+                asset = AudioAsset(path, raw_meta)
+            elif group == 'DOCUMENT': 
+                asset = DocumentAsset(path, raw_meta)
+            else: 
+                asset = GenericFileAsset(path, raw_meta)
             
             return (
                 asset.recorded_date, # May be None
@@ -85,6 +97,7 @@ class MetadataProcessor:
                 getattr(asset, 'duration', None),
                 getattr(asset, 'bitrate', None if group != 'AUDIO' else asset.bitrate),
                 getattr(asset, 'video_codec', None),
+                p_hash,
                 asset.get_full_json(),
                 content_hash
             )
@@ -141,6 +154,7 @@ class MetadataProcessor:
             duration = ?,
             bitrate = ?, 
             video_codec = ?, 
+            perceptual_hash = ?,
             extended_metadata = ?
         WHERE content_hash = ?;
         """
