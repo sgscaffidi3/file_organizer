@@ -45,7 +45,7 @@ from version_util import print_version_info
 import config 
 
 DEFAULT_FILE_GROUPS: Dict[str, List[str]] = {
-    'IMAGE': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff'],
+    'IMAGE': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif'],
     'VIDEO': ['.mp4', '.mov', '.avi', '.mkv', '.wmv'],
     'DOCUMENT': ['.pdf', '.doc', '.docx', '.txt'],
     'OTHER': []
