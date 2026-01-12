@@ -20,10 +20,11 @@ _CHANGELOG_ENTRIES = [
     "FIX: Added null-checks for extended_metadata in get_audio_summary to prevent TypeError.",
     "FIX: CLI Version check now exits before attempting to connect to the database (resolves OperationalError).",
     "FIX: Reordered __main__ block to ensure clean version exit without DB errors.",
-    "FEATURE: Added 'Visual Duplicates' report using Perceptual Hash matches."
+    "FEATURE: Added 'Visual Duplicates' report using Perceptual Hash matches.",
+    "UX: Added TQDM progress bars to Visual Duplicate and Extraction Sample queries to prevent 'stuck' appearance."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.5.17
+# Version: 0.5.18
 # ------------------------------------------------------------------------------
 from pathlib import Path
 from typing import Dict, Any, List
@@ -31,6 +32,7 @@ import argparse
 import datetime
 import sys
 import json
+from tqdm import tqdm
 from database_manager import DatabaseManager
 
 class ReportGenerator:
@@ -98,6 +100,7 @@ class ReportGenerator:
         
     def get_visual_duplicates(self) -> List[Dict]:
         """Finds images that look the same (Exact Phash Match) but are different files."""
+        print("  > Analyzing visual hashes...")
         query = """
         SELECT perceptual_hash, COUNT(*) 
         FROM MediaContent 
@@ -107,7 +110,9 @@ class ReportGenerator:
         """
         rows = self.db.execute_query(query)
         results = []
-        for phash, count in rows:
+        
+        # Added Progress Bar
+        for phash, count in tqdm(rows, desc="    Grouping Similar", unit="group", leave=False):
             # Get details
             files = self.db.execute_query("""
                 SELECT mc.content_hash, mc.size, fpi.original_relative_path 
@@ -120,6 +125,7 @@ class ReportGenerator:
 
     def get_extraction_samples(self) -> List[Dict]:
         """Gets the largest file of each type to spot-check metadata extraction."""
+        print("  > Sampling metadata...")
         query = """
             SELECT file_type_group, content_hash, MAX(size), extended_metadata
             FROM MediaContent
@@ -127,7 +133,7 @@ class ReportGenerator:
         """
         rows = self.db.execute_query(query)
         samples = []
-        for group, h, size, meta_json in rows:
+        for group, h, size, meta_json in tqdm(rows, desc="    Fetching Samples", unit="type", leave=False):
             path_res = self.db.execute_query("SELECT original_relative_path FROM FilePathInstances WHERE content_hash = ? LIMIT 1", (h,))
             try:
                 meta_dict = json.loads(meta_json) if meta_json else {}
