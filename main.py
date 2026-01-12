@@ -13,10 +13,11 @@ _CHANGELOG_ENTRIES = [
     "CLI: Added flags for --scan, --meta, --dedupe, --migrate, --report, and --all.",
     "SAFETY: Added Database existence checks before running dependent stages.",
     "FEATURE: Added --serve flag to launch the Flask Web Dashboard.",
-    "CLI: Added --db flag to override database path (useful for viewing clean_index.sqlite)."
+    "CLI: Added --db flag to override database path (useful for viewing clean_index.sqlite).",
+    "FIX: Added db.create_schema() to run_metadata, run_dedupe, and run_migrate to ensure DB schema is up-to-date when skipping the scan phase."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
-# Version: 0.6.11
+# Version: 0.6.12
 # ------------------------------------------------------------------------------
 import sys
 import argparse
@@ -38,7 +39,7 @@ try:
     from migrator import Migrator
     from report_generator import ReportGenerator
     from html_generator import HTMLGenerator
-    from server import run_server
+    # from server import run_server # Imported dynamically to avoid overhead
     from version_util import print_version_info
 except ImportError as e:
     print(f"CRITICAL: Failed to import project modules. {e}")
@@ -80,6 +81,8 @@ class PipelineOrchestrator:
         if not self.verify_db_exists(): return
         
         with DatabaseManager(self.db_path) as db:
+            # FIX: Ensure schema is current (e.g. adding new columns like perceptual_hash)
+            db.create_schema()
             processor = MetadataProcessor(db, self.config_mgr)
             processor.process_metadata()
 
@@ -88,6 +91,7 @@ class PipelineOrchestrator:
         if not self.verify_db_exists(): return
 
         with DatabaseManager(self.db_path) as db:
+            db.create_schema() # Ensure schema is current
             deduper = Deduplicator(db, self.config_mgr)
             deduper.run_deduplication()
 
@@ -99,6 +103,7 @@ class PipelineOrchestrator:
         print(f"Mode: {mode_str}")
         
         with DatabaseManager(self.db_path) as db:
+            # No create_schema needed here usually, but safe to add if tables might be missing
             migrator = Migrator(db, self.config_mgr)
             migrator.run_migration()
 
@@ -112,24 +117,6 @@ class PipelineOrchestrator:
             
     def run_server(self):
         self._print_header("Web Interface")
-        # Temporarily override config output dir if looking at a custom DB
-        # This hack ensures the server looks at the right DB file
-        
-        # We actually need to pass the specific DB path to the server runner
-        # But server.py currently assumes Config.OUTPUT_DIR / metadata.sqlite
-        # So we must modify ConfigManager instance or Server logic.
-        # EASIEST: Just monkey-patch the config manager instance for this run.
-        
-        # Point the config's output directory to the PARENT of the provided DB file
-        # effectively making the provided DB the 'metadata.sqlite' of that context?
-        # No, that's messy.
-        
-        # Better: Update server.py to accept an explicit DB path (Already done in previous steps? Let's check)
-        # server.py's run_server accepts `config_manager`.
-        # We need to tell server.py to use `self.db_path`.
-        
-        # UPDATE: I will modify server.py slightly to accept db_path override in run_server
-        # For now, I will modify the global variable in server via the import.
         import server
         server.DB_PATH = self.db_path
         server.run_server(self.config_mgr)
