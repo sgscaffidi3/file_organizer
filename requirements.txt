@@ -11,6 +11,7 @@ Pillow
 pillow-heif
 pymediainfo>=6.1.0
 hachoir
+ImageHash
 
 # RAW Image Processing
 rawpy
