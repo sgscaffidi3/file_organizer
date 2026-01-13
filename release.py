@@ -3,8 +3,13 @@
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 1
 _CHANGELOG_ENTRIES = [
-    "Initial creation of release automation script."
+    "Initial creation of release automation script.",
+    "Implemented automated changelog clearing and archiving.",
+    "Implemented token estimation logic.",
+    "Added logic to inject --changes CLI argument into target files.",
+    "Added logic to detect and auto-fix missing changelog variables with user prompt."
 ]
+_REL_CHANGES = []
 # ------------------------------------------------------------------------------
 import os
 import sys
@@ -13,15 +18,16 @@ import re
 import datetime
 from pathlib import Path
 from config_manager import ConfigManager
-from version_util import get_python_files
+from version_util import get_python_files, print_version_info, print_change_history
 
-# Regex Patterns for Safe Replacement
-# Matches: _MINOR_VERSION = 123
+# Regex Patterns for Code Modification
 RE_MINOR = re.compile(r"^(_MINOR_VERSION\s*=\s*)(\d+)", re.MULTILINE)
-# Matches: _CHANGELOG_ENTRIES = [ ... ] (across multiple lines)
 RE_CHANGELOG = re.compile(r"^(_CHANGELOG_ENTRIES\s*=\s*\[)(.*?)(\])", re.DOTALL | re.MULTILINE)
-# Matches: _REL_CHANGES = [ ... ] OR detects if it's missing
 RE_REL_CHANGES = re.compile(r"^(_REL_CHANGES\s*=\s*\[)(.*?)(\])", re.DOTALL | re.MULTILINE)
+
+# Regex for CLI Injection
+RE_ARG_PARSER = re.compile(r"parser\s*=\s*argparse\.ArgumentParser\(.*?\)", re.DOTALL)
+RE_VERSION_CHECK = re.compile(r"if\s+args\.version:", re.MULTILINE)
 
 class ReleaseManager:
     def __init__(self, dry_run=False, current_tokens=0):
@@ -48,7 +54,7 @@ class ReleaseManager:
         
         # 2. Process Files
         for py_file in get_python_files(self.root):
-            if py_file.name == "release.py": continue # Self-preservation
+            if py_file.name == "release.py": continue 
 
             processed_content, log_entry, chars_saved = self.process_file(py_file)
             
@@ -80,7 +86,6 @@ class ReleaseManager:
         print(f"Files Processed: {self.files_processed}")
         print(f"Characters Removed: {self.total_chars_removed}")
         
-        # Token Estimate (Approx 4 chars per token)
         est_tokens = self.total_chars_removed / 4
         print(f"Estimated Context Savings: ~{int(est_tokens)} tokens")
         
@@ -88,64 +93,110 @@ class ReleaseManager:
             print(f"Current Load: {self.current_tokens}")
             print(f"Projected New Load: {int(self.current_tokens - est_tokens)}")
 
+    def inject_missing_cli(self, content, filename):
+        """Injects --changes argument and handler if missing."""
+        
+        # 1. Inject Argument Definition
+        if "parser.add_argument" in content and "'--changes'" not in content:
+            if not self.dry_run:
+                # Find a safe place to inject (after version flag usually)
+                sub_pattern = r"(parser\.add_argument\('-v'.*?\))"
+                replacement = r"\1\n    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')"
+                content = re.sub(sub_pattern, replacement, content, count=1)
+                print(f"   + Injected --changes flag definition into {filename}")
+
+        # 2. Inject Argument Handler
+        if "if args.version:" in content and "args.changes" not in content:
+            if not self.dry_run:
+                # Inject before args.version check to keep it grouped
+                # Logic: We use version_util to do the printing
+                
+                # Check if version_util is imported
+                if "from version_util import" not in content and "import version_util" not in content:
+                     # This is tricky without parsing AST, assume we can add it to the handler
+                     pass # Skipping import injection for safety, assuming files compliant with N06 have it
+                
+                handler_code = (
+                    "\n    if hasattr(args, 'changes') and args.changes:\n"
+                    "        from version_util import print_change_history\n"
+                    "        print_change_history(__file__, args.changes)\n"
+                    "        sys.exit(0)\n"
+                )
+                
+                # Insert before 'if args.version:'
+                content = content.replace("if args.version:", handler_code + "    if args.version:")
+                print(f"   + Injected --changes handler logic into {filename}")
+                
+        return content
+
     def process_file(self, filepath: Path):
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # Extract Changelog Content for Notes
+        # --- STEP A: Auto-Conversion Check ---
+        if "_CHANGELOG_ENTRIES" not in content:
+            print(f"\n⚠️  File {filepath.name} is missing changelog structure.")
+            if not self.dry_run:
+                resp = input(f"   Auto-convert {filepath.name} to standard format? [y/N]: ").strip().lower()
+                if resp == 'y':
+                    # Heuristic insert after imports
+                    header_end = content.find("import")
+                    if header_end == -1: header_end = 0
+                    # Find end of imports? Too risky. Just put at top or after comments.
+                    # Simple append after first block of comments?
+                    insertion = (
+                        "\n# VERSIONING\n"
+                        "_MAJOR_VERSION = 0\n"
+                        "_MINOR_VERSION = 1\n"
+                        "_CHANGELOG_ENTRIES = [\"Automatically initialized by release script.\"]\n"
+                        "_REL_CHANGES = []\n"
+                    )
+                    # Insert after the file docstring if possible, else top
+                    content = insertion + content
+                    print(f"   + Initialized changelog in {filepath.name}")
+                else:
+                    return content, None, 0
+            else:
+                 print(f"   [Dry Run] Would prompt to auto-convert {filepath.name}")
+                 return content, None, 0
+
+        # --- STEP B: CLI Injection ---
+        content = self.inject_missing_cli(content, filepath.name)
+
+        # --- STEP C: Release Logic ---
+        # Extract Changelog
         match_log = RE_CHANGELOG.search(content)
-        if not match_log:
-            return content, None, 0
+        if not match_log: return content, None, 0
             
         raw_log_entries = match_log.group(2)
-        # Parse roughly to count entries. 
-        # We assume entries are comma-separated strings.
-        # A simple approximation is counting lines or quotes.
-        # Let's rely on standard eval for parsing the list literal to get exact count
         try:
-            # Safe eval of the list part
             entries_list = eval(f"[{raw_log_entries}]")
             count = len(entries_list)
         except:
-            print(f"⚠️  Warning: Could not parse changelog in {filepath.name}, assuming 0.")
             count = 0
             entries_list = []
 
-        if count == 0:
-            return content, None, 0
+        if count == 0: return content, None, 0
 
-        # Formatted log entry for Release Notes
         log_txt = f"## {filepath.name}\n"
         for item in entries_list:
             log_txt += f"- {item}\n"
         log_txt += "\n"
 
-        # --- MODIFICATIONS ---
-
         # 1. Update Minor Version
         new_content = RE_MINOR.sub(f"\\g<1>{self.target_minor}", content)
 
         # 2. Update _REL_CHANGES
-        # If it exists, append. If not, insert it before Changelog.
         match_rel = RE_REL_CHANGES.search(new_content)
         if match_rel:
-            # Existing list found
             existing_list_str = match_rel.group(2)
             try:
-                # We need to construct the new list string.
-                # "1, 5" -> "1, 5, {count}"
-                # We do this textually to preserve formatting if possible, but simple replacement is safer
                 existing_list = eval(f"[{existing_list_str}]")
                 existing_list.append(count)
-                new_list_str = str(existing_list) # e.g. "[1, 5, 3]"
-                # Replace the whole block
-                new_content = RE_REL_CHANGES.sub(f"_REL_CHANGES = {new_list_str}", new_content)
-            except:
-                print(f"⚠️  Failed to update _REL_CHANGES in {filepath.name}")
+                new_content = RE_REL_CHANGES.sub(f"_REL_CHANGES = {str(existing_list)}", new_content)
+            except: pass
         else:
-            # Insert new variable before _CHANGELOG_ENTRIES
-            # We look for the start of the changelog match in the *modified* content
-            # Re-search because indices shifted
+            # Inject _REL_CHANGES if missing but changelog exists
             m_log_new = RE_CHANGELOG.search(new_content)
             if m_log_new:
                 start = m_log_new.start()
@@ -153,7 +204,6 @@ class ReleaseManager:
                 new_content = new_content[:start] + insertion + new_content[start:]
 
         # 3. Clear Changelog
-        # Re-search again just to be safe with indices
         new_content = RE_CHANGELOG.sub(
             f'_CHANGELOG_ENTRIES = [\n    "Released as v{self.release_ver_str}"\n]', 
             new_content
@@ -169,23 +219,12 @@ class ReleaseManager:
             return
 
         print(f"📦 Packaging clean source to: {bundle_path.name}")
-        # Use bundle_project.py logic or simple walk
-        # Using simple walk here to ensure it uses the *in-memory* state if we wanted, 
-        # but since we wrote files to disk, we can read them back.
-        
-        # Ignoring patterns
         ignore = {'.git', 'venv', '__pycache__', 'test_output', 'organized_media_output', 'test_assets'}
         
         with open(bundle_path, 'w', encoding='utf-8') as outfile:
             outfile.write(f"# CLEAN PROJECT BUNDLE v{self.release_ver_str}\n")
             outfile.write(f"# Generated: {datetime.datetime.now()}\n\n")
             
-            for f in get_python_files(self.root):
-                # Also include HTML/CSS/JSON/MD
-                # Actually, get_python_files only gets .py. Let's expand slightly for the bundle.
-                pass 
-            
-            # Re-implement simple walk for bundle to catch non-py files
             for dirpath, dirnames, filenames in os.walk(self.root):
                 dirnames[:] = [d for d in dirnames if d not in ignore]
                 for filename in filenames:
@@ -207,10 +246,22 @@ class ReleaseManager:
                     outfile.write("\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dry-run', action='store_true', help="Simulate the release without changing files.")
-    parser.add_argument('--tokens', type=int, default=0, help="Current token usage for estimate calculation.")
+    parser = argparse.ArgumentParser(description="Release Manager")
+    parser.add_argument('--dry-run', action='store_true', help="Simulate the release.")
+    parser.add_argument('--tokens', type=int, default=0, help="Current token usage for estimate.")
+    # Standard compliance
+    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all')
+    
     args = parser.parse_args()
+    
+    if args.version:
+        print_version_info(__file__, "Release Manager")
+        sys.exit(0)
+        
+    if args.changes:
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     
     manager = ReleaseManager(dry_run=args.dry_run, current_tokens=args.tokens)
     manager.run()
