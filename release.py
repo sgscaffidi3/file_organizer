@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: release.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 1
 _CHANGELOG_ENTRIES = [
     "Initial creation of release automation script.",
     "Implemented automated changelog clearing and archiving.",
@@ -9,9 +9,10 @@ _CHANGELOG_ENTRIES = [
     "Added logic to inject --changes CLI argument into target files.",
     "Added logic to detect and auto-fix missing changelog variables with user prompt.",
     "IMPROVEMENT: Enhanced token estimation to compare Current Load vs New Bundle Size.",
-    "FIX: Calculated projected bundle size correctly during --dry-run."
+    "FIX: Calculated projected bundle size correctly during --dry-run.",
+    "FEATURE: Added --preview_notes flag to output generated release notes to console without writing to disk."
 ]
-_REL_CHANGES = [5]
+_REL_CHANGES = [5, 7]
 # ------------------------------------------------------------------------------
 import os
 import sys
@@ -28,10 +29,11 @@ RE_CHANGELOG = re.compile(r"^(_CHANGELOG_ENTRIES\s*=\s*\[)(.*?)(\])", re.DOTALL 
 RE_REL_CHANGES = re.compile(r"^(_REL_CHANGES\s*=\s*\[)(.*?)(\])", re.DOTALL | re.MULTILINE)
 
 class ReleaseManager:
-    def __init__(self, dry_run=False, current_tokens=0):
+    def __init__(self, dry_run=False, current_tokens=0, preview_notes=False):
         self.root = Path(__file__).parent.resolve()
         self.config = ConfigManager(self.root / 'organizer_config.json')
         self.dry_run = dry_run
+        self.preview_notes = preview_notes
         self.current_tokens = current_tokens
         
         self.target_minor = self.config.PROJECT_VERSION[1]
@@ -68,7 +70,15 @@ class ReleaseManager:
                 else:
                     print(f"🔎 Would Update: {py_file.name} (Saved {chars_saved} chars)")
 
-        # 3. Save Release Notes
+        # 3. Preview Notes (New Feature)
+        if self.preview_notes:
+            print("\n" + "="*60)
+            print("📄 PREVIEW RELEASE NOTES")
+            print("="*60)
+            print(notes_content.strip())
+            print("="*60 + "\n")
+
+        # 4. Save Release Notes
         if not self.dry_run:
             self.release_notes_dir.mkdir(exist_ok=True)
             notes_path = self.release_notes_dir / f"RELEASE_v{self.release_ver_str}.md"
@@ -76,10 +86,10 @@ class ReleaseManager:
                 f.write(notes_content)
             print(f"\n📝 Release Notes saved to: {notes_path}")
 
-        # 4. Generate Clean Bundle (Calculates size in dry-run too)
+        # 5. Generate Clean Bundle (Calculates size in dry-run too)
         bundle_size = self.create_bundle()
 
-        # 5. Token Statistics
+        # 6. Token Statistics
         self.print_token_stats(bundle_size)
 
     def print_token_stats(self, bundle_size_bytes):
@@ -96,11 +106,6 @@ class ReleaseManager:
         print(f"New Bundle Size:      {new_start_tokens:,} tokens (estimated)")
         
         if self.current_tokens > 0:
-            # We estimate the new context load as: 
-            # Current Load - Tokens Removed + (Bundle Overhead difference, usually negligible)
-            # A safer estimate for the *Next* session is just the Bundle Size, 
-            # assuming you start a fresh chat with only the bundle.
-            
             print(f"\n[Current Session]")
             print(f"Current Usage:        {self.current_tokens:,} tokens")
             
@@ -221,9 +226,6 @@ class ReleaseManager:
         bundle_path = self.root / "clean_project_bundle.txt"
         ignore = {'.git', 'venv', '__pycache__', 'test_output', 'organized_media_output', 'test_assets', 'release_notes'}
         
-        # In Dry Run, we must simulate the size calculation because the files on disk haven't changed yet.
-        # Calculated Size = Current Size - Chars Removed + Overhead
-        
         total_size = 0
         
         if not self.dry_run:
@@ -279,28 +281,7 @@ class ReleaseManager:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Release Manager")
     parser.add_argument('--dry-run', action='store_true', help="Simulate the release.")
-    parser.add_argument('--tokens', type=int, default=0, help="Current token usage for estimate.")
-    parser.add_argument('-v', '--version', action='store_true')
-    parser.add_argument('--changes', nargs='?', const='all')
-    
-    args = parser.parse_args()
-    
-    if args.version:
-        from version_util import print_version_info
-        print_version_info(__file__, "Release Manager")
-        sys.exit(0)
-        
-    if args.changes:
-        from version_util import print_change_history
-        print_change_history(__file__, args.changes)
-        sys.exit(0)
-    
-    manager = ReleaseManager(dry_run=args.dry_run, current_tokens=args.tokens)
-    manager.run()
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Release Manager")
-    parser.add_argument('--dry-run', action='store_true', help="Simulate the release.")
+    parser.add_argument('--preview_notes', action='store_true', help="Print generated release notes to console.")
     parser.add_argument('--tokens', type=int, default=0, help="Current token usage for estimate.")
     # Standard compliance
     parser.add_argument('-v', '--version', action='store_true')
@@ -318,5 +299,5 @@ if __name__ == "__main__":
         print_change_history(__file__, args.changes)
         sys.exit(0)
     
-    manager = ReleaseManager(dry_run=args.dry_run, current_tokens=args.tokens)
+    manager = ReleaseManager(dry_run=args.dry_run, current_tokens=args.tokens, preview_notes=args.preview_notes)
     manager.run()
