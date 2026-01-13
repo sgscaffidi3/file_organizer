@@ -2,9 +2,6 @@
 # File: config_manager.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-# Version: <Automatically calculated via dynamic import of target module>
-# ------------------------------------------------------------------------------
-# CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "Initial creation to manage dynamic settings loaded from a JSON file.",
     "Project name changed to \"file_organizer\" in descriptions.",
@@ -12,12 +9,15 @@ _CHANGELOG_ENTRIES = [
     "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
     "CRITICAL FIX: Added optional `output_dir` to `__init__` to enable test environment isolation, resolving `AttributeError` in test suite setup.",
     "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes.",
-    "FEATURE: Added FFMPEG_SETTINGS property to expose video transcoding configuration."
+    "FEATURE: Added FFMPEG_SETTINGS property to expose video transcoding configuration.",
+    "FEATURE: Added PROJECT_VERSION property to access the master version tuple."
 ]
+_PATCH_VERSION = len(_CHANGELOG_ENTRIES)
+# Version: 0.3.8
 # ------------------------------------------------------------------------------
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # --- Project Dependencies ---
 from version_util import print_version_info
@@ -53,6 +53,12 @@ class ConfigManager:
         except Exception as e:
             print(f"An unexpected error occurred loading config: {e}. Using default settings.")
             return {}
+
+    @property
+    def PROJECT_VERSION(self) -> Tuple[int, int]:
+        """Returns the (Major, Minor) version tuple from config."""
+        v = self._data.get('project_version', {})
+        return (v.get('major', 0), v.get('minor', 0))
 
     @property
     def SOURCE_DIR(self) -> Path:
@@ -108,7 +114,6 @@ if __name__ == "__main__":
         # Example usage of the ConfigManager when run independently
         manager = ConfigManager()
         print(f"Loaded config from: {manager.config_path.resolve()}")
+        print(f"Project Version: {manager.PROJECT_VERSION}")
         print(f"Source Directory: {manager.SOURCE_DIR}")
         print(f"Output Directory: {manager.OUTPUT_DIR}")
-        print("File Groups:", manager.FILE_GROUPS)
-        print("FFmpeg Settings:", manager.FFMPEG_SETTINGS)
