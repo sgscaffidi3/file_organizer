@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: version_util.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation.",
     "Updated print_version_info to handle file reading for version detection.",
@@ -15,7 +15,8 @@ _CHANGELOG_ENTRIES = [
     "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output.",
     "REFACTOR: Removed hardcoded file list. Implemented dynamic recursive scanning for .py files.",
     "FEATURE: Added --get_change_counts command to report historical changes using _REL_CHANGES list.",
-    "LOGIC: Update audit to check if MINOR_VERSION matches the Master Config."
+    "LOGIC: Update audit to check if MINOR_VERSION matches the Master Config.",
+    "FEATURE: Added print_change_history() to support the new --changes CLI flag across the project."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: <Automatically calculated via dynamic import of target module>
@@ -107,48 +108,40 @@ def get_all_file_versions(project_root: Path):
             
     print("=" * SEPARATOR_WIDTH)
 
-def get_change_counts(project_root: Path):
+def print_change_history(file_path: str, arg_value: str):
     """
-    Reports the accumulated change history for each file.
-    Format: MAJOR_VERSION.(list_position).(List Value)
+    Handles the --changes command.
+    arg_value: 'all' (const) or an integer string.
     """
-    print(f"\n{'='*80}")
-    print(f"HISTORICAL CHANGE REPORT")
-    print(f"{'='*80}")
-    
-    for filepath in get_python_files(project_root):
-        rel_path = str(filepath.relative_to(project_root))
-        try:
-            module = _load_module_by_path(filepath)
-            
-            # Check for history list
-            rel_changes = getattr(module, '_REL_CHANGES', [])
-            current_log = getattr(module, '_CHANGELOG_ENTRIES', [])
-            major = getattr(module, '_MAJOR_VERSION', 0)
-            
-            if not rel_changes and not current_log:
-                continue
-                
-            # Calculate Grand Total
-            total_changes = sum(rel_changes) + len(current_log)
-            
-            print(f"\n📄 {rel_path} (Total Changes: {total_changes})")
-            
-            # Print History Sequence
-            history_strs = []
-            for i, count in enumerate(rel_changes):
-                # Format: Major.(ListPosition).(Count)
-                history_strs.append(f"v{major}.{i}.{count}")
-            
-            # Print Current Pending
-            if current_log:
-                history_strs.append(f"Current({len(current_log)})")
-                
-            print(f"   History: {', '.join(history_strs)}")
+    file_path_obj = Path(file_path).resolve()
+    try:
+        module = _load_module_by_path(file_path_obj)
+        rel_changes = getattr(module, '_REL_CHANGES', [])
+        current_log = getattr(module, '_CHANGELOG_ENTRIES', [])
+        major = getattr(module, '_MAJOR_VERSION', 0)
+        
+        # Mode 1: Grand Total
+        if arg_value == 'all' or arg_value is None:
+            total = sum(rel_changes) + len(current_log)
+            print(f"Total Changes: {total}")
+            print(f"  - Historical Releases: {sum(rel_changes)}")
+            print(f"  - Current Pending:     {len(current_log)}")
+            return
 
-        except Exception:
-            pass
-    print(f"{'='*80}\n")
+        # Mode 2: Specific Release Index
+        try:
+            idx = int(arg_value)
+            if 0 <= idx < len(rel_changes):
+                count = rel_changes[idx]
+                # Format: Major.ListPosition.Count
+                print(f"Release v{major}.{idx}.{count} Changes: {count}")
+            else:
+                print(f"Error: Release index {idx} out of range. History length: {len(rel_changes)}")
+        except ValueError:
+            print(f"Error: Invalid argument for --changes: {arg_value}")
+
+    except Exception as e:
+        print(f"Error reading change history for {file_path}: {e}")
 
 def print_version_info(file_path: str, component_name: str, print_changelog: bool = True):
     """Prints version info for a single file."""
@@ -159,11 +152,6 @@ def print_version_info(file_path: str, component_name: str, print_changelog: boo
         major = getattr(module, '_MAJOR_VERSION', 'ERR')
         minor = getattr(module, '_MINOR_VERSION', 'ERR')
         changelog_list = getattr(module, '_CHANGELOG_ENTRIES', [])
-        
-        # Support new flag for specific history index
-        # This function is usually called by the individual script's --version flag
-        # We generally just print the current version here.
-            
     except Exception as e:
         print(f"Error reading {file_path}: {e}")
         return
@@ -181,7 +169,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Version Utility")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information.')
     parser.add_argument('--get_all', action='store_true', help='Audit all project files.')
-    parser.add_argument('--get_change_counts', action='store_true', help='Show historical change counts.')
+    # This script itself supports the new standard
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
+    
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent 
@@ -190,10 +180,10 @@ if __name__ == '__main__':
         print_version_info(__file__, "Version Utility")
         sys.exit(0)
     
-    if args.get_all:
-        get_all_file_versions(project_root)
+    if args.changes:
+        print_change_history(__file__, args.changes)
         sys.exit(0)
 
-    if args.get_change_counts:
-        get_change_counts(project_root)
+    if args.get_all:
+        get_all_file_versions(project_root)
         sys.exit(0)
