@@ -1,14 +1,15 @@
 # ==============================================================================
 # File: release.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
+_MINOR_VERSION = 3
 _CHANGELOG_ENTRIES = [
     "Initial creation of release automation script.",
     "Implemented automated changelog clearing and archiving.",
     "Implemented token estimation logic.",
     "Added logic to inject --changes CLI argument into target files.",
     "Added logic to detect and auto-fix missing changelog variables with user prompt.",
-    "IMPROVEMENT: Enhanced token estimation to compare Current Load vs New Bundle Size."
+    "IMPROVEMENT: Enhanced token estimation to compare Current Load vs New Bundle Size.",
+    "FIX: Calculated projected bundle size correctly during --dry-run."
 ]
 _REL_CHANGES = [5]
 # ------------------------------------------------------------------------------
@@ -75,7 +76,7 @@ class ReleaseManager:
                 f.write(notes_content)
             print(f"\n📝 Release Notes saved to: {notes_path}")
 
-        # 4. Generate Clean Bundle
+        # 4. Generate Clean Bundle (Calculates size in dry-run too)
         bundle_size = self.create_bundle()
 
         # 5. Token Statistics
@@ -86,23 +87,29 @@ class ReleaseManager:
         print("TOKEN & EFFICIENCY REPORT")
         print("-" * 60)
         
-        # Heuristic: 1 Token ~= 4 Characters (approx bytes for ASCII code)
+        # Heuristic: 1 Token ~= 4 Characters
         tokens_saved = int(self.total_chars_removed / 4)
         new_start_tokens = int(bundle_size_bytes / 4)
         
         print(f"Files Processed:      {self.files_processed}")
         print(f"Changelog Cleaned:    {tokens_saved:,} tokens (removed from source)")
-        print(f"New Bundle Size:      {new_start_tokens:,} tokens (approx)")
+        print(f"New Bundle Size:      {new_start_tokens:,} tokens (estimated)")
         
         if self.current_tokens > 0:
-            diff = self.current_tokens - new_start_tokens
-            pct = (diff / self.current_tokens) * 100
-            print(f"\nCurrent Context:      {self.current_tokens:,} tokens")
-            print(f"New Session Start:    {new_start_tokens:,} tokens")
-            print(f"Context Reduction:    {diff:,} tokens ({pct:.1f}% leaner)")
+            # We estimate the new context load as: 
+            # Current Load - Tokens Removed + (Bundle Overhead difference, usually negligible)
+            # A safer estimate for the *Next* session is just the Bundle Size, 
+            # assuming you start a fresh chat with only the bundle.
             
-            if new_start_tokens > 60000:
-                print("\n⚠️  Note: Bundle is still large. Consider removing non-essential files from bundle.")
+            print(f"\n[Current Session]")
+            print(f"Current Usage:        {self.current_tokens:,} tokens")
+            
+            print(f"\n[Next Session (Fresh Start)]")
+            print(f"Project Codebase:     {new_start_tokens:,} tokens")
+            
+            savings = self.current_tokens - new_start_tokens
+            if savings > 0:
+                print(f"Potential Savings:    {savings:,} tokens if you restart now.")
         else:
             print("\n(Pass --tokens [count] to see comparison against current session)")
             
@@ -114,7 +121,6 @@ class ReleaseManager:
         # 1. Inject Argument Definition
         if "parser.add_argument" in content and "'--changes'" not in content:
             if not self.dry_run:
-                # Find a safe place to inject (after version flag usually)
                 sub_pattern = r"(parser\.add_argument\('-v'.*?\))"
                 replacement = r"\1\n    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')"
                 content = re.sub(sub_pattern, replacement, content, count=1)
@@ -123,7 +129,6 @@ class ReleaseManager:
         # 2. Inject Argument Handler
         if "if args.version:" in content and "args.changes" not in content:
             if not self.dry_run:
-                # Inject before args.version check
                 handler_code = (
                     "\n    if hasattr(args, 'changes') and args.changes:\n"
                     "        from version_util import print_change_history\n"
@@ -152,7 +157,6 @@ class ReleaseManager:
                         "_CHANGELOG_ENTRIES = [\"Automatically initialized by release script.\"]\n"
                         "_REL_CHANGES = []\n"
                     )
-                    # Insert after imports (heuristic)
                     header_end = content.find("import")
                     if header_end == -1: header_end = 0
                     content = insertion + content
@@ -215,41 +219,84 @@ class ReleaseManager:
 
     def create_bundle(self):
         bundle_path = self.root / "clean_project_bundle.txt"
+        ignore = {'.git', 'venv', '__pycache__', 'test_output', 'organized_media_output', 'test_assets', 'release_notes'}
         
-        # Calculate size even in dry run (using current files approx)
-        if self.dry_run:
+        # In Dry Run, we must simulate the size calculation because the files on disk haven't changed yet.
+        # Calculated Size = Current Size - Chars Removed + Overhead
+        
+        total_size = 0
+        
+        if not self.dry_run:
+            # LIVE MODE: Write the file and then get its size
+            with open(bundle_path, 'w', encoding='utf-8') as outfile:
+                outfile.write(f"# CLEAN PROJECT BUNDLE v{self.release_ver_str}\n")
+                outfile.write(f"# Generated: {datetime.datetime.now()}\n\n")
+                
+                for dirpath, dirnames, filenames in os.walk(self.root):
+                    dirnames[:] = [d for d in dirnames if d not in ignore]
+                    for filename in filenames:
+                        if filename in ['clean_project_bundle.txt', 'project_bundle.txt', 'test_run.log', 'test_run.log.txt']: continue
+                        if filename.endswith(('.pyc', '.sqlite')): continue
+                        
+                        filepath = Path(dirpath) / filename
+                        rel_path = filepath.relative_to(self.root)
+                        
+                        outfile.write(f"\n{'='*60}\n")
+                        outfile.write(f"FILE: {rel_path}\n")
+                        outfile.write(f"{'='*60}\n")
+                        
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as infile:
+                                outfile.write(infile.read())
+                        except Exception as e:
+                            outfile.write(f"# Error reading file: {e}")
+                        outfile.write("\n")
+            return os.path.getsize(bundle_path)
+            
+        else:
+            # DRY RUN MODE: Estimate based on current disk size
             print(f"🔎 Would create bundle: {bundle_path.name}")
-            return 0
-
-        print(f"📦 Packaging clean source to: {bundle_path.name}")
-        ignore = {'.git', 'venv', '__pycache__', 'test_output', 'organized_media_output', 'test_assets'}
-        
-        with open(bundle_path, 'w', encoding='utf-8') as outfile:
-            outfile.write(f"# CLEAN PROJECT BUNDLE v{self.release_ver_str}\n")
-            outfile.write(f"# Generated: {datetime.datetime.now()}\n\n")
+            
+            # Header overhead
+            total_size += 100 
             
             for dirpath, dirnames, filenames in os.walk(self.root):
                 dirnames[:] = [d for d in dirnames if d not in ignore]
                 for filename in filenames:
-                    # Skip previous bundles and logs
                     if filename in ['clean_project_bundle.txt', 'project_bundle.txt', 'test_run.log', 'test_run.log.txt']: continue
                     if filename.endswith(('.pyc', '.sqlite')): continue
                     
                     filepath = Path(dirpath) / filename
-                    rel_path = filepath.relative_to(self.root)
                     
-                    outfile.write(f"\n{'='*60}\n")
-                    outfile.write(f"FILE: {rel_path}\n")
-                    outfile.write(f"{'='*60}\n")
-                    
-                    try:
-                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as infile:
-                            outfile.write(infile.read())
-                    except Exception as e:
-                        outfile.write(f"# Error reading file: {e}")
-                    outfile.write("\n")
+                    # Add current file size
+                    total_size += os.path.getsize(filepath)
+                    # Add separator overhead (~80 chars)
+                    total_size += 80
+            
+            # Subtract what we plan to delete
+            return total_size - self.total_chars_removed
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Release Manager")
+    parser.add_argument('--dry-run', action='store_true', help="Simulate the release.")
+    parser.add_argument('--tokens', type=int, default=0, help="Current token usage for estimate.")
+    parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all')
+    
+    args = parser.parse_args()
+    
+    if args.version:
+        from version_util import print_version_info
+        print_version_info(__file__, "Release Manager")
+        sys.exit(0)
         
-        return os.path.getsize(bundle_path)
+    if args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
+    
+    manager = ReleaseManager(dry_run=args.dry_run, current_tokens=args.tokens)
+    manager.run()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Release Manager")
