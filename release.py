@@ -1,15 +1,16 @@
 # ==============================================================================
 # File: release.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 1
+_MINOR_VERSION = 2
 _CHANGELOG_ENTRIES = [
     "Initial creation of release automation script.",
     "Implemented automated changelog clearing and archiving.",
     "Implemented token estimation logic.",
     "Added logic to inject --changes CLI argument into target files.",
-    "Added logic to detect and auto-fix missing changelog variables with user prompt."
+    "Added logic to detect and auto-fix missing changelog variables with user prompt.",
+    "IMPROVEMENT: Enhanced token estimation to compare Current Load vs New Bundle Size."
 ]
-_REL_CHANGES = []
+_REL_CHANGES = [5]
 # ------------------------------------------------------------------------------
 import os
 import sys
@@ -24,10 +25,6 @@ from version_util import get_python_files, print_version_info, print_change_hist
 RE_MINOR = re.compile(r"^(_MINOR_VERSION\s*=\s*)(\d+)", re.MULTILINE)
 RE_CHANGELOG = re.compile(r"^(_CHANGELOG_ENTRIES\s*=\s*\[)(.*?)(\])", re.DOTALL | re.MULTILINE)
 RE_REL_CHANGES = re.compile(r"^(_REL_CHANGES\s*=\s*\[)(.*?)(\])", re.DOTALL | re.MULTILINE)
-
-# Regex for CLI Injection
-RE_ARG_PARSER = re.compile(r"parser\s*=\s*argparse\.ArgumentParser\(.*?\)", re.DOTALL)
-RE_VERSION_CHECK = re.compile(r"if\s+args\.version:", re.MULTILINE)
 
 class ReleaseManager:
     def __init__(self, dry_run=False, current_tokens=0):
@@ -79,19 +76,37 @@ class ReleaseManager:
             print(f"\n📝 Release Notes saved to: {notes_path}")
 
         # 4. Generate Clean Bundle
-        self.create_bundle()
+        bundle_size = self.create_bundle()
 
-        # 5. Stats
+        # 5. Token Statistics
+        self.print_token_stats(bundle_size)
+
+    def print_token_stats(self, bundle_size_bytes):
         print("-" * 60)
-        print(f"Files Processed: {self.files_processed}")
-        print(f"Characters Removed: {self.total_chars_removed}")
+        print("TOKEN & EFFICIENCY REPORT")
+        print("-" * 60)
         
-        est_tokens = self.total_chars_removed / 4
-        print(f"Estimated Context Savings: ~{int(est_tokens)} tokens")
+        # Heuristic: 1 Token ~= 4 Characters (approx bytes for ASCII code)
+        tokens_saved = int(self.total_chars_removed / 4)
+        new_start_tokens = int(bundle_size_bytes / 4)
+        
+        print(f"Files Processed:      {self.files_processed}")
+        print(f"Changelog Cleaned:    {tokens_saved:,} tokens (removed from source)")
+        print(f"New Bundle Size:      {new_start_tokens:,} tokens (approx)")
         
         if self.current_tokens > 0:
-            print(f"Current Load: {self.current_tokens}")
-            print(f"Projected New Load: {int(self.current_tokens - est_tokens)}")
+            diff = self.current_tokens - new_start_tokens
+            pct = (diff / self.current_tokens) * 100
+            print(f"\nCurrent Context:      {self.current_tokens:,} tokens")
+            print(f"New Session Start:    {new_start_tokens:,} tokens")
+            print(f"Context Reduction:    {diff:,} tokens ({pct:.1f}% leaner)")
+            
+            if new_start_tokens > 60000:
+                print("\n⚠️  Note: Bundle is still large. Consider removing non-essential files from bundle.")
+        else:
+            print("\n(Pass --tokens [count] to see comparison against current session)")
+            
+        print("-" * 60)
 
     def inject_missing_cli(self, content, filename):
         """Injects --changes argument and handler if missing."""
@@ -108,22 +123,13 @@ class ReleaseManager:
         # 2. Inject Argument Handler
         if "if args.version:" in content and "args.changes" not in content:
             if not self.dry_run:
-                # Inject before args.version check to keep it grouped
-                # Logic: We use version_util to do the printing
-                
-                # Check if version_util is imported
-                if "from version_util import" not in content and "import version_util" not in content:
-                     # This is tricky without parsing AST, assume we can add it to the handler
-                     pass # Skipping import injection for safety, assuming files compliant with N06 have it
-                
+                # Inject before args.version check
                 handler_code = (
                     "\n    if hasattr(args, 'changes') and args.changes:\n"
                     "        from version_util import print_change_history\n"
                     "        print_change_history(__file__, args.changes)\n"
                     "        sys.exit(0)\n"
                 )
-                
-                # Insert before 'if args.version:'
                 content = content.replace("if args.version:", handler_code + "    if args.version:")
                 print(f"   + Injected --changes handler logic into {filename}")
                 
@@ -139,11 +145,6 @@ class ReleaseManager:
             if not self.dry_run:
                 resp = input(f"   Auto-convert {filepath.name} to standard format? [y/N]: ").strip().lower()
                 if resp == 'y':
-                    # Heuristic insert after imports
-                    header_end = content.find("import")
-                    if header_end == -1: header_end = 0
-                    # Find end of imports? Too risky. Just put at top or after comments.
-                    # Simple append after first block of comments?
                     insertion = (
                         "\n# VERSIONING\n"
                         "_MAJOR_VERSION = 0\n"
@@ -151,7 +152,9 @@ class ReleaseManager:
                         "_CHANGELOG_ENTRIES = [\"Automatically initialized by release script.\"]\n"
                         "_REL_CHANGES = []\n"
                     )
-                    # Insert after the file docstring if possible, else top
+                    # Insert after imports (heuristic)
+                    header_end = content.find("import")
+                    if header_end == -1: header_end = 0
                     content = insertion + content
                     print(f"   + Initialized changelog in {filepath.name}")
                 else:
@@ -164,7 +167,6 @@ class ReleaseManager:
         content = self.inject_missing_cli(content, filepath.name)
 
         # --- STEP C: Release Logic ---
-        # Extract Changelog
         match_log = RE_CHANGELOG.search(content)
         if not match_log: return content, None, 0
             
@@ -196,7 +198,6 @@ class ReleaseManager:
                 new_content = RE_REL_CHANGES.sub(f"_REL_CHANGES = {str(existing_list)}", new_content)
             except: pass
         else:
-            # Inject _REL_CHANGES if missing but changelog exists
             m_log_new = RE_CHANGELOG.search(new_content)
             if m_log_new:
                 start = m_log_new.start()
@@ -214,9 +215,11 @@ class ReleaseManager:
 
     def create_bundle(self):
         bundle_path = self.root / "clean_project_bundle.txt"
+        
+        # Calculate size even in dry run (using current files approx)
         if self.dry_run:
             print(f"🔎 Would create bundle: {bundle_path.name}")
-            return
+            return 0
 
         print(f"📦 Packaging clean source to: {bundle_path.name}")
         ignore = {'.git', 'venv', '__pycache__', 'test_output', 'organized_media_output', 'test_assets'}
@@ -228,6 +231,7 @@ class ReleaseManager:
             for dirpath, dirnames, filenames in os.walk(self.root):
                 dirnames[:] = [d for d in dirnames if d not in ignore]
                 for filename in filenames:
+                    # Skip previous bundles and logs
                     if filename in ['clean_project_bundle.txt', 'project_bundle.txt', 'test_run.log', 'test_run.log.txt']: continue
                     if filename.endswith(('.pyc', '.sqlite')): continue
                     
@@ -244,6 +248,8 @@ class ReleaseManager:
                     except Exception as e:
                         outfile.write(f"# Error reading file: {e}")
                     outfile.write("\n")
+        
+        return os.path.getsize(bundle_path)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Release Manager")
@@ -256,10 +262,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.version:
+        from version_util import print_version_info
         print_version_info(__file__, "Release Manager")
         sys.exit(0)
         
     if args.changes:
+        from version_util import print_change_history
         print_change_history(__file__, args.changes)
         sys.exit(0)
     
