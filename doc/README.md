@@ -1,14 +1,15 @@
-# ==============================================================================
-# File: README.md
-_MAJOR_VERSION = 0
-_MINOR_VERSION = 5
-_CHANGELOG_ENTRIES = [
-    "Initial creation of the README file.",
-    "Updated for v0.3.x pipeline features.",
-    "Updated for v0.9.x Web Dashboard, Transcoding, and Visual Analysis features.",
-    "Added Release Automation workflow details."
-]
-# ------------------------------------------------------------------------------
+<!--
+File: README.md
+_MAJOR_VERSION: 0
+_MINOR_VERSION: 1
+Changelog:
+- Initial creation of the README file.
+- Updated documentation to reflect the new JSON-based configuration.
+- Project name changed to "File Organizer".
+- Updated dependency and output path details.
+- Added section for Web Dashboard, Transcoding, and Visual Analysis features.
+- Added Release Workflow and Maintenance sections.
+-->
 
 # 🗄️ File Organizer
 
@@ -23,7 +24,7 @@ This is a high-performance Python utility designed to catalog, deduplicate, and 
 *   **Safety**: Non-destructive "Copy" migration by default (Dry-Run supported).
 
 ### Web Dashboard
-A responsive Flask-based UI running locally (`http://127.0.0.1:5000`):
+A responsive Flask-based UI running locally:
 *   **Map View**: Visualize GPS-tagged photos on an interactive world map (Leaflet.js).
 *   **Inspector**: View metadata, add **User Notes** (saved to DB), and check file history.
 *   **Live Transcoding**: Streams MKV, AVI, and HEVC videos to the browser on-the-fly using FFmpeg.
@@ -59,7 +60,7 @@ Start the web server to browse your organized library:
 ```bash
 python main.py --serve
 ```
-Access at: http://127.0.0.1:5000
+Access at: http://127.0.0.1:5000, or from another machine, using your server's IP address on the LAN
 Map: Click the "Map" button in the top bar.
 Visual Duplicates: Go to Sidebar -> Dupes -> Show Visual Match.
 Transcoding: Videos not natively supported by Chrome (AVI, MKV) are transcoded automatically.
@@ -77,13 +78,12 @@ release.py: Automated release engineering tool (cleans changelogs, updates versi
 
 🧪 Testing
 Run the comprehensive test suite to verify your environment:
-code
-Bash
+```bash
 python test/test_all.py
-
+```
 📦 Release Management
 To prepare the project for a new release (cleaning changelogs and compressing context):
-code
-Bash
+```bash
 python release.py --dry-run
 python release.py
+```

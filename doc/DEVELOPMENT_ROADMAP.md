@@ -1,13 +1,13 @@
-# ==============================================================================
-# File: DEVELOPMENT_ROADMAP.md
-_MAJOR_VERSION = 0
-_MINOR_VERSION = 2
-_CHANGELOG_ENTRIES = [
-    "Initial creation of the project development roadmap and schedule.",
-    "Synchronized tasks with Functional Requirements F01-F10.",
-    "Updated status: Phase 1-4 Complete. Added Phase 5 (Web/AI) and Phase 6 (Release)."
-]
-# ------------------------------------------------------------------------------
+<!--
+File: doc/DEVELOPMENT_ROADMAP.md
+_MAJOR_VERSION: 0
+_MINOR_VERSION: 1
+Changelog:
+- Initial creation of the project development roadmap and schedule.
+- Synchronized tasks with Functional Requirements F01-F10.
+- Updated status: Phases 1-4 Complete.
+- Added Phase 5 (Web/AI) and Phase 6 (Release).
+-->
 
 # File Organizer Project: Development Roadmap & Schedule
 

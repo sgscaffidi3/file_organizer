@@ -1,15 +1,17 @@
-# ==============================================================================
-# File: README_REQUIREMENTS.md
-_MAJOR_VERSION = 0
-_MINOR_VERSION = 1
-_CHANGELOG_ENTRIES = [
-    "Initial document creation outlining Functional and Non-Functional requirements.",
-    "Updated versioning and patch derivation strategy.",
-    "Added requirements for Visual Duplicates, Mapping, Transcoding, and Release Automation.",
-    "Added **F11-F14** to cover Visual Matching, Mapping, Transcoding, and User Notes.",
-    "Added **N07** for Release Automation."
-]
-# ------------------------------------------------------------------------------
+### 2. `doc/README_REQUIREMENTS.md`
+
+```markdown
+<!--
+File: doc/README_REQUIREMENTS.md
+_MAJOR_VERSION: 0
+_MINOR_VERSION: 1
+Changelog:
+- Initial document creation outlining Functional and Non-Functional requirements.
+- Implemented the versioning and patch derivation strategy.
+- Added N06 requirement to formalize CLI tool support.
+- Updated version to 0.3.7; added F10 (Dependency Audit).
+- Added requirements for Visual Duplicates, Mapping, Transcoding, and Release Automation.
+-->
 
 # File Organizer Project: Requirements Specification
 
