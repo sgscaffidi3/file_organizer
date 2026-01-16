@@ -2,14 +2,15 @@
 # File: test/test_metadata_processor.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 21
-# Version: 0.3.21
+_PATCH_VERSION = 22
+# Version: 0.3.22
 # ------------------------------------------------------------------------------
 # CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "FIX: Updated Test 02 to provide both width and height to mock skipped record.",
     "RELIABILITY: Maintained Deep Asset Check for required test files.",
-    "SYNC: Matched all logic with MetadataProcessor v0.3.23."
+    "SYNC: Matched all logic with MetadataProcessor v0.3.23.",
+    "FIX: Updated DB inserts to include 'perceptual_hash' so skipped records are correctly ignored."
 ]
 # ------------------------------------------------------------------------------
 import unittest, os, shutil, sqlite3, sys, argparse
@@ -63,7 +64,8 @@ class TestMetadataProcessor(unittest.TestCase):
         cls.test_dir.mkdir(parents=True, exist_ok=True)
         
         db = DatabaseManager(cls.db_path); db.connect(); db.create_schema()
-        for col in ["width INTEGER", "height INTEGER", "duration REAL", "bitrate INTEGER", "title TEXT"]:
+        # Ensure schema has new columns
+        for col in ["width INTEGER", "height INTEGER", "duration REAL", "bitrate INTEGER", "title TEXT", "perceptual_hash TEXT"]:
             try: db.execute_query(f"ALTER TABLE MediaContent ADD COLUMN {col};")
             except: pass
         db.close()
@@ -73,15 +75,15 @@ class TestMetadataProcessor(unittest.TestCase):
         self.db.execute_query("DELETE FROM MediaContent;"); self.db.execute_query("DELETE FROM FilePathInstances;")
         self.processor = MetadataProcessor(self.db, self.config_manager)
         
-        # 1. Valid
+        # 1. Valid (Needs Processing)
         p_valid = self.test_dir / "valid.jpg"
         shutil.copy(TEST_ASSETS_DIR / "sample_valid.jpg", p_valid)
         self._insert_record("h_valid", p_valid, 'IMAGE')
 
-        # 2. Already processed (Must have width AND height to be skipped by query)
+        # 2. Already processed (Must have width/height AND perceptual_hash)
         p_skip = self.test_dir / "skipped.jpg"
         shutil.copy(TEST_ASSETS_DIR / "sample_valid.jpg", p_skip)
-        self._insert_record("h_skip", p_skip, 'IMAGE', width=1, height=1)
+        self._insert_record("h_skip", p_skip, 'IMAGE', width=1, height=1, phash="00000000")
 
         # 3. Missing
         p_miss = self.test_dir / "missing.jpg" 
@@ -92,9 +94,9 @@ class TestMetadataProcessor(unittest.TestCase):
         shutil.copy(TEST_ASSETS_DIR / "sample_corrupt.jpg", p_bad)
         self._insert_record("h_bad", p_bad, 'IMAGE')
 
-    def _insert_record(self, c_hash, path, group, width=None, height=None):
-        mq = "INSERT INTO MediaContent (content_hash, size, file_type_group, date_best, width, height) VALUES (?, 1, ?, '2023', ?, ?)"
-        self.db.execute_query(mq, (c_hash, group, width, height))
+    def _insert_record(self, c_hash, path, group, width=None, height=None, phash=None):
+        mq = "INSERT INTO MediaContent (content_hash, size, file_type_group, date_best, width, height, perceptual_hash) VALUES (?, 1, ?, '2023', ?, ?, ?)"
+        self.db.execute_query(mq, (c_hash, group, width, height, phash))
         pq = "INSERT INTO FilePathInstances (content_hash, path, original_full_path, original_relative_path, is_primary) VALUES (?, ?, ?, ?, 1)"
         self.db.execute_query(pq, (c_hash, str(path), str(path), path.name))
 
@@ -108,6 +110,7 @@ class TestMetadataProcessor(unittest.TestCase):
     def test_02_skips_processed_via_query(self):
         records = self.processor._get_files_to_process()
         record_hashes = [r[0] for r in records]
+        # h_skip should be absent because it has W/H and P_HASH
         self.assertNotIn("h_skip", record_hashes)
 
     def test_03_missing_file_handling(self):
