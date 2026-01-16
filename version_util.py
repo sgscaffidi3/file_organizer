@@ -1,9 +1,7 @@
 # ==============================================================================
 # File: version_util.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
-# ------------------------------------------------------------------------------
-# CHANGELOG:
+_MINOR_VERSION = 5
 _CHANGELOG_ENTRIES = [
     "Initial implementation.",
     "Updated print_version_info to handle file reading for version detection.",
@@ -13,205 +11,179 @@ _CHANGELOG_ENTRIES = [
     "Added 'import sys' and 'sys.exit(0)' to self-check for clean exit.",
     "Minor version bump to 0.3 to synchronize with highest version in the project.",
     "Added --get_all command to audit the version and format status of all files.",
-    "CRITICAL FIX: Updated VERSION_CHECK_FILES to correctly locate test files within the 'test' subdirectory, resolving FILE NOT FOUND errors during audit.",
-    "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output to 40 characters for cleaner display of long test file names.",
-    "Updated VERSION_CHECK_FILES to include new utility and test files: `libraries_helper.py`, `demo_libraries.py`, and `test/test_libraries.py`.",
-    "Updated VERSION_CHECK_FILES to include `test/test_migrator.py`.",
-    "Updated VERSION_CHECK_FILES to include `test/test_type_coverage.py`."
+    "CRITICAL FIX: Updated VERSION_CHECK_FILES to correctly locate test files within the 'test' subdirectory.",
+    "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output.",
+    "REFACTOR: Removed hardcoded file list. Implemented dynamic recursive scanning for .py files.",
+    "FEATURE: Added --get_change_counts command to report historical changes using _REL_CHANGES list.",
+    "LOGIC: Update audit to check if MINOR_VERSION matches the Master Config.",
+    "FEATURE: Added print_change_history() to support the new --changes CLI flag across the project."
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
-
-# List of all files to check for project-wide version status.
-VERSION_CHECK_FILES = [
-    "version_util.py",
-    "config.py",
-    "config_manager.py",
-    "database_manager.py",
-    "deduplicator.py",
-    "file_scanner.py",
-    "html_generator.py",
-    "main.py",
-    "metadata_processor.py",
-    "migrator.py",
-    "report_generator.py",
-    "libraries_helper.py",
-    "demo_libraries.py",
-    "asset_manager.py",
-    "video_asset.py",
-    "base_assets.py",
-    
-    # Test files are in a 'test' subdirectory
-    "test/test_all.py",
-    "test/test_database_manager.py",
-    "test/test_deduplicator.py",
-    "test/test_file_scanner.py",
-    "test/test_metadata_processor.py",
-    "test/test_libraries.py",
-    "test/test_assets.py",
-    "test/test_migrator.py",
-    "test/test_type_coverage.py"
-]
-
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Generator
 import sys
 import argparse
 import importlib.util
 
-# --- Helper Functions for Dynamic Import ---
+# Config dependency for Master Version check
+try:
+    from config_manager import ConfigManager
+except ImportError:
+    ConfigManager = None
+
+def get_python_files(root: Path) -> Generator[Path, None, None]:
+    """Recursively finds all .py files, ignoring venv and pycache."""
+    for path in root.rglob("*.py"):
+        # Filter out unwanted directories
+        parts = path.parts
+        if 'venv' in parts or '.venv' in parts or '__pycache__' in parts or '.git' in parts:
+            continue
+        yield path
 
 def _load_module_by_path(filepath: Path):
-    """Dynamically loads a module given its file path to access its variables."""
+    """Dynamically loads a module given its file path."""
     module_name = filepath.stem
     spec = importlib.util.spec_from_file_location(module_name, filepath)
     if spec is None:
-        # Fallback for complex paths or system configurations
         raise ImportError(f"Could not load spec for {filepath}")
-        
     module = importlib.util.module_from_spec(spec)
-    # CRITICAL: sys.modules must be updated for the imports *inside* the loaded module to work
     sys.modules[module_name] = module 
-    
-    # Execute the module code
     spec.loader.exec_module(module)
     return module
 
 def get_all_file_versions(project_root: Path):
-    """
-    Checks the version status of all files in the project and reports the minor version
-    and changelog format status in a table. Implements the --get_all command.
-    """
-    # Increased separator width to 100 for better table formatting
-    SEPARATOR_WIDTH = 100
-    FILE_WIDTH = 40 # Increased from 25
-    VERSION_WIDTH = 18
-    MINOR_WIDTH = 18
-    FORMAT_WIDTH = 18
+    """Audits version status of all files against Master Config."""
+    
+    # Get Master Version
+    master_minor = -1
+    if ConfigManager:
+        try:
+            _, master_minor = ConfigManager(project_root / 'organizer_config.json').PROJECT_VERSION
+        except: pass
+
+    SEPARATOR_WIDTH = 110
+    FILE_WIDTH = 45
+    VERSION_WIDTH = 15
+    STATUS_WIDTH = 45
 
     print("=" * SEPARATOR_WIDTH)
-    print("PROJECT VERSION AUDIT: Independent Versioning Status")
-    print(f"Project Root: {project_root.resolve()}")
+    print("PROJECT VERSION AUDIT")
+    print(f"Root: {project_root.resolve()}")
+    if master_minor != -1:
+        print(f"Master Config Target Minor Version: {master_minor}")
     print("=" * SEPARATOR_WIDTH)
     
-    # Updated column widths for header
-    print(f"{'FILE':<{FILE_WIDTH}}{'VERSION (M.m.P)':<{VERSION_WIDTH}}{'MINOR (Expected 3)':<{MINOR_WIDTH}}{'CHANGELOG FORMAT':<{FORMAT_WIDTH}}")
+    print(f"{'FILE':<{FILE_WIDTH}}{'VER (M.m.P)':<{VERSION_WIDTH}}{'STATUS':<{STATUS_WIDTH}}")
     print("-" * SEPARATOR_WIDTH)
 
-    for filename in VERSION_CHECK_FILES:
-        # The filename now may include a subdirectory path (e.g., 'test/test_all.py')
-        filepath = project_root / filename
+    for filepath in get_python_files(project_root):
+        rel_path = str(filepath.relative_to(project_root))
         
-        # Check for file existence first
-        if not filepath.exists():
-             print(f"{filename:<{FILE_WIDTH}}{'---':<{VERSION_WIDTH}}{'N/A':<{MINOR_WIDTH}}{'FILE NOT FOUND':<{FORMAT_WIDTH}}")
-             continue
-
         try:
             module = _load_module_by_path(filepath)
+            major = getattr(module, '_MAJOR_VERSION', '?')
+            minor = getattr(module, '_MINOR_VERSION', '?')
             
-            # 1. Get Major and Minor version (always hardcoded)
-            major = getattr(module, '_MAJOR_VERSION', 'ERR')
-            minor = getattr(module, '_MINOR_VERSION', 'ERR')
-            
-            # 2. Check for the Changelog List
+            patch = "?"
             if hasattr(module, '_CHANGELOG_ENTRIES'):
-                changelog_list = getattr(module, '_CHANGELOG_ENTRIES')
-                # A file using the list format has a Patch count derived from the list length
-                patch = len(changelog_list)
-                format_status = "✅ LIST-BASED"
-            else:
-                # If the list is not found, the file is NOT using the new format.
-                patch = "???"
-                format_status = "❌ COMMENTS/MISSING"
+                patch = len(getattr(module, '_CHANGELOG_ENTRIES'))
+            
+            full_ver = f"{major}.{minor}.{patch}"
+            
+            status = []
+            if minor != master_minor and master_minor != -1:
+                status.append(f"MINOR MISMATCH (Exp {master_minor})")
+            
+            if not hasattr(module, '_REL_CHANGES'):
+                status.append("NO HISTORY TRACKING")
+                
+            status_str = ", ".join(status) if status else "✅ OK"
+            
+            print(f"{rel_path:<{FILE_WIDTH}}{full_ver:<{VERSION_WIDTH}}{status_str:<{STATUS_WIDTH}}")
 
-            full_version = f"{major}.{minor}.{patch}"
-            minor_status = f"{minor}" if minor == 3 else f"**{minor}**"
-
-            # Updated column width for data
-            print(f"{filename:<{FILE_WIDTH}}{full_version:<{VERSION_WIDTH}}{minor_status:<{MINOR_WIDTH}}{format_status:<{FORMAT_WIDTH}}")
-
-        except Exception:
-            # Catching dynamic import errors (e.g., if a file has a syntax error)
-            print(f"{filename:<{FILE_WIDTH}}{'---':<{VERSION_WIDTH}}{'ERR':<{MINOR_WIDTH}}{'IMPORT FAILED':<{FORMAT_WIDTH}}")
-
+        except Exception as e:
+            print(f"{rel_path:<{FILE_WIDTH}}{'ERR':<{VERSION_WIDTH}}{str(e):<{STATUS_WIDTH}}")
+            
     print("=" * SEPARATOR_WIDTH)
-    print("\nSUMMARY:")
-    print("Minor Version (0.3) needs synchronization in files marked with **.")
-    print("Changelog needs conversion to Python list in files marked with ❌.")
 
+def print_change_history(file_path: str, arg_value: str):
+    """
+    Handles the --changes command.
+    arg_value: 'all' (const) or an integer string.
+    """
+    file_path_obj = Path(file_path).resolve()
+    try:
+        module = _load_module_by_path(file_path_obj)
+        rel_changes = getattr(module, '_REL_CHANGES', [])
+        current_log = getattr(module, '_CHANGELOG_ENTRIES', [])
+        major = getattr(module, '_MAJOR_VERSION', 0)
+        
+        # Mode 1: Grand Total
+        if arg_value == 'all' or arg_value is None:
+            total = sum(rel_changes) + len(current_log)
+            print(f"Total Changes: {total}")
+            print(f"  - Historical Releases: {sum(rel_changes)}")
+            print(f"  - Current Pending:     {len(current_log)}")
+            return
+
+        # Mode 2: Specific Release Index
+        try:
+            idx = int(arg_value)
+            if 0 <= idx < len(rel_changes):
+                count = rel_changes[idx]
+                # Format: Major.ListPosition.Count
+                print(f"Release v{major}.{idx}.{count} Changes: {count}")
+            else:
+                print(f"Error: Release index {idx} out of range. History length: {len(rel_changes)}")
+        except ValueError:
+            print(f"Error: Invalid argument for --changes: {arg_value}")
+
+    except Exception as e:
+        print(f"Error reading change history for {file_path}: {e}")
 
 def print_version_info(file_path: str, component_name: str, print_changelog: bool = True):
-    """
-    Prints the version information and changelog for a single file 
-    by dynamically loading its variables.
-    """
+    """Prints version info for a single file."""
     file_path_obj = Path(file_path).resolve()
     
     try:
         module = _load_module_by_path(file_path_obj)
-        
         major = getattr(module, '_MAJOR_VERSION', 'ERR')
         minor = getattr(module, '_MINOR_VERSION', 'ERR')
-        # Get the changelog list, defaulting to an empty list if not found
         changelog_list = getattr(module, '_CHANGELOG_ENTRIES', [])
-            
     except Exception as e:
-        print(f"Component: {component_name}")
-        print(f"Project: {file_path_obj.parent.name}")
-        print(f"Version: Error printing version info (Import failed): {e}")
-        print("\nCHANGELOG:")
-        print("    Could not load changelog entries.")
+        print(f"Error reading {file_path}: {e}")
         return
 
     full_version = f"{major}.{minor}.{len(changelog_list)}"
-    
     print(f"Component: {component_name}")
-    print(f"Project: {file_path_obj.parent.name}")
     print(f"Version: {full_version}")
     
     if print_changelog:
         print("\nCHANGELOG:")
         for i, entry in enumerate(changelog_list, 1):
-            # Print the changelog entries clearly with index.
             print(f"    {i}. {entry}")
 
-
-# Self-check logic for version_util.py itself
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Version Utility")
-    parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
-    # NEW ARGUMENT: --get_all
-    parser.add_argument('--get_all', action='store_true', help='Perform a version audit across all project files.')
+    parser.add_argument('-v', '--version', action='store_true', help='Show version information.')
+    parser.add_argument('--get_all', action='store_true', help='Audit all project files.')
+    # This script itself supports the new standard
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
+    
     args = parser.parse_args()
 
-    current_file_path = Path(__file__).resolve()
-    # The parent directory is the project root, which is where all other files are located.
-    project_root = current_file_path.parent 
+    project_root = Path(__file__).resolve().parent 
 
     if args.version:
-        # We manually use the global variables for the self-check (simplest path)
-        major = _MAJOR_VERSION
-        minor = _MINOR_VERSION
-        patch = len(_CHANGELOG_ENTRIES)
-        full_version = f"{major}.{minor}.{patch}"
-        
-        print(f"Component: Version Utility (self-check)")
-        print(f"Project: {current_file_path.parent.name}")
-        print(f"Version: {full_version}")
-        print("\nCHANGELOG:")
-        for i, entry in enumerate(_CHANGELOG_ENTRIES, 1):
-            print(f"    {i}. {entry}")
-            
+        print_version_info(__file__, "Version Utility")
         sys.exit(0)
     
-    elif args.get_all:
-        # NEW LOGIC: Audit all files in the project
-        get_all_file_versions(project_root)
+    if args.changes:
+        print_change_history(__file__, args.changes)
         sys.exit(0)
-        
-    else:
-        # Default behavior (if no args are passed)
-        parser.print_help()
+
+    if args.get_all:
+        get_all_file_versions(project_root)
         sys.exit(0)
