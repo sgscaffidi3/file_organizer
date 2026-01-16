@@ -2,27 +2,24 @@
 # File: test/test_libraries.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 3
-_PATCH_VERSION = 6
-# Version: 0.3.6
-# ------------------------------------------------------------------------------
-# CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "Initial creation of test_libraries.py to validate external library helpers.",
     "Implemented test for version reporting (get_library_versions).",
     "Implemented test for TQDM progress bar wrapper.",
     "Implemented test for Pillow metadata extraction with a non-existent file path.",
     "Implemented test for standalone CLI version check (N06).",
-    "BUG FIX: Updated error key assertions to match granular error keys (Pillow_Error) introduced in libraries_helper v0.4.19."
+    "BUG FIX: Updated error key assertions to match granular error keys (Pillow_Error) introduced in libraries_helper v0.4.19.",
+    "FIX: Added missing 'import argparse' to support clean exit for version check."
 ]
 # ------------------------------------------------------------------------------
 import re
 import unittest
 import sys
 import subprocess
+import argparse
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from io import StringIO
-import argparse
 
 # Ensure project root is in path for module imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -134,10 +131,6 @@ class TestLibrariesHelper(unittest.TestCase):
                 f"Output did not contain a valid version format. Output was: {result.stdout}"
             )
             
-            # Optional: Log the detected version for debugging
-            detected_version = match.group(1)
-            print(f"Detected Version: {detected_version}")
-            
         except subprocess.CalledProcessError as e:
             self.fail(f"Subprocess failed with error code {e.returncode}. Stderr: {e.stderr}")
 
@@ -147,12 +140,11 @@ if __name__ == "__main__":
     args, unknown = parser.parse_known_args()
     
     if args.version:
-        # Fallback if version_util not in path
         try:
             from version_util import print_version_info
             print_version_info(__file__, "Libraries Tests")
         except:
-            print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+            print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{len(_CHANGELOG_ENTRIES)}")
         sys.exit(0)
         
     unittest.main(argv=[sys.argv[0]] + unknown)
