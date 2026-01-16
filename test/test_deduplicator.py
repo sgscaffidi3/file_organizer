@@ -2,10 +2,6 @@
 # File: test/test_deduplicator.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 4
-_PATCH_VERSION = 19
-# Version: 0.4.19
-# ------------------------------------------------------------------------------
-# CHANGELOG:
 _CHANGELOG_ENTRIES = [
     "Initial implementation.",
     "CRITICAL FIX: Implemented logic to correctly set `is_primary=1`.",
@@ -57,6 +53,8 @@ class TestDeduplicator(unittest.TestCase):
         db_setup.create_schema()
         try: db_setup.execute_query("ALTER TABLE MediaContent ADD COLUMN new_path_id TEXT;")
         except: pass
+        try: db_setup.execute_query("ALTER TABLE MediaContent ADD COLUMN perceptual_hash TEXT;")
+        except: pass
         db_setup.close()
             
     @classmethod
@@ -96,8 +94,8 @@ class TestDeduplicator(unittest.TestCase):
         """Test final path generation with updated signature."""
         primary_path = str(Path(self.test_dir) / 'A.jpg') 
         
-        # FORCE rename_on_copy = True for this test to ensure predictable output
-        # We mock the dictionary returned by ORGANIZATION_PREFS
+        # FORCE rename_on_copy = True for this test
+        # This ensures we get the HASH_ID filename format instead of the original name
         with patch.object(ConfigManager, 'ORGANIZATION_PREFS', {'rename_on_copy': True}):
             final_path = self.deduplicator._calculate_final_path(
                 primary_path, 
@@ -111,7 +109,6 @@ class TestDeduplicator(unittest.TestCase):
             expected_part = os.path.join("2020", "01")
             
             self.assertIn(expected_part, final_path)
-            # Now we can safely assert the hash_id format because we forced the config
             self.assertIn(f"{TEST_HASH[:12]}_100.jpg", final_path)
             self.assertTrue(final_path.startswith(str(self.config_manager.OUTPUT_DIR)))
 
@@ -121,8 +118,6 @@ class TestDeduplicator(unittest.TestCase):
         
         with DatabaseManager(self.db_manager_path) as db:
             # Check is_primary was set. 
-            # We expect the file with date '2020-01-01' (A.jpg) to be primary.
-            # Get its ID first
             prim_row = db.execute_query("SELECT file_id FROM FilePathInstances WHERE path LIKE '%A.jpg'")[0]
             prim_id = prim_row[0]
             
@@ -131,8 +126,7 @@ class TestDeduplicator(unittest.TestCase):
             self.assertTrue(row, "No record found in MediaContent")
             final_path = row[0][0]
             
-            # Verify path contains the File ID of the winner (if rename is default) OR the original name
-            # Since config might vary, we just check date structure
+            # Verify path contains the date structure
             self.assertIn(os.path.join("2020", "01"), final_path)
 
 if __name__ == '__main__':
@@ -145,7 +139,7 @@ if __name__ == '__main__':
             from version_util import print_version_info
             print_version_info(__file__, "Deduplicator Tests")
         except:
-            print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
+            print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{len(_CHANGELOG_ENTRIES)}")
         sys.exit(0)
 
     unittest.main(argv=[sys.argv[0]] + unknown, exit=False)
