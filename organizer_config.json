@@ -1,6 +1,7 @@
 {
+    "project_version": { "major": 0, "minor": 1 },
     "paths": {
-        "source_directory": "C:/family/dad/personal_media",
+        "source_directory": "D:/personal_media",
         "output_directory": "./organized_media_output"
     },
     "organization": {
@@ -9,14 +10,13 @@
         "deduplication_strategy": "KEEP_OLDEST" 
     },
     "file_groups": {
-        "IMAGE": [".jpg", ".jpeg", ".png", ".gif", ".tiff", ".bmp", ".webp", ".heic", ".heif", ".raw", ".cr2", ".nef", ".arw", ".dng", ".orf", ".svg"],
         "IMAGE": [".jpg", ".jpeg", ".png", ".gif", ".tiff", ".tif", ".bmp", ".webp", ".heic", ".heif", ".raw", ".cr2", ".nef", ".arw", ".dng", ".orf", ".svg"],
         "VIDEO": [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".3gp", ".webm", ".ts", ".m2ts", ".vob", ".mpg", ".mpeg", ".flv", ".f4v", ".mxf"],
         "AUDIO": [".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".wma", ".aiff", ".m4b", ".opus"],
         "DOCUMENT": [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".epub", ".mobi", ".rtf", ".md"]
     },
     "ffmpeg": {
-        "binary_path": "C:/crap/newbins/FFMPEG/static",
+        "binary_path": "C:/crap/new_avhcd_tools",
         "video_codec": "libx264",
         "audio_codec": "aac",
         "preset": "ultrafast",
