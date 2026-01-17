@@ -1,22 +1,14 @@
 # ==============================================================================
 # File: test/test_file_scanner.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 1
 _PATCH_VERSION = 12
 # Version: 0.3.12
 # ------------------------------------------------------------------------------
 # CHANGELOG:
+_REL_CHANGES = [10]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of test suite for FileScanner.",
-    "CRITICAL FIX: Implemented logic to correctly create mock files (A, B, C, D) and their directories in `setUpClass`.",
-    "CRITICAL FIX: Used a real ConfigManager instance for tests to properly handle output paths.",
-    "CRITICAL FIX: Extended `setUpClass` to ensure the correct hashes (HASH_64KB_X, HASH_64KB_Y) are generated and set as class attributes to be used in assertions.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "CRITICAL PATH FIX: Explicitly added the project root to `sys.path` to resolve `ModuleNotFoundError: No module named 'version_util'` when running the test file directly.",
-    "CRITICAL TEST FIX: Explicitly check for successful insertion into MediaContent in `test_01` and `test_02`. This was implicitly broken by the prior fix to the scanner's counter logic.",
-    "DEFINITIVE TEST FIX: Added constants for HASH_64KB_X and HASH_64KB_Y based on the file contents created, and ensured `setUpClass` closes the setup DB connection to prevent `PermissionError`. Added explicit definition of mock file paths and a check for inserted content to resolve `IndexError` and `AssertionError: 0 != 1`.",
-    "CRITICAL CONFIG FIX: Removed unsupported `source_dir` argument from ConfigManager initialization in `setUpClass`."
+    "Released as v0.1.0"
 ]
 # ------------------------------------------------------------------------------
 import unittest
@@ -207,8 +199,14 @@ if __name__ == '__main__':
     # ARGUMENT PARSING
     parser = argparse.ArgumentParser(description="Unit tests for File Scanner.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     
     args, unknown = parser.parse_known_args()
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         if 'print_version_info' in locals():
             print_version_info(__file__, "File Scanner Unit Tests")

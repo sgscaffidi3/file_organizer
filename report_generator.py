@@ -2,27 +2,10 @@
 # File: report_generator.py
 # ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 1
+_REL_CHANGES = [19]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of ReportGenerator class.",
-    "Refactored for database-agnostic reporting using DatabaseManager.",
-    "Added Video Codec and Resolution (SD/HD/4K) breakdown reports.",
-    "Added Space-savings and Duplicate Audit path reporting.",
-    "Added Image Megapixel (MP) quality breakdown.",
-    "Added Extremes (Largest/Smallest, Longest/Shortest) and Averages.",
-    "Added Yearly Timeline distribution.",
-    "FIX: Handle 'N/A' or non-integer strings in duration and bitrate.",
-    "FEATURE: Added Audio Codec and Bitrate quality tiers.",
-    "CONSOLIDATION: Merged all previous features into a single comprehensive report.",
-    "UPDATE: Refactored Duplicate Audit to show top 10 largest (with --verbose toggle).",
-    "FEATURE: Added Extraction Spot-Check for largest file of each type.",
-    "FIX: Corrected get_top_duplicates query to use COUNT(*) instead of non-existent fpi.id.",
-    "FIX: Added null-checks for extended_metadata in get_audio_summary to prevent TypeError.",
-    "FIX: CLI Version check now exits before attempting to connect to the database (resolves OperationalError).",
-    "FIX: Reordered __main__ block to ensure clean version exit without DB errors.",
-    "FEATURE: Added 'Visual Duplicates' report using Perceptual Hash matches.",
-    "UX: Added TQDM progress bars to Visual Duplicate and Extraction Sample queries to prevent 'stuck' appearance.",
-    "PERFORMANCE: Replaced N+1 query loop in 'Visual Duplicates' with a single optimized JOIN for instant results."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.6.19
@@ -293,10 +276,16 @@ class ReportGenerator:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('-vdb', '--verbose', action='store_true', help="Print all duplicates instead of top 10")
     parser.add_argument('--db', type=str, default="demo/metadata.sqlite")
     args = parser.parse_args()
     
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)

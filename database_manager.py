@@ -1,29 +1,13 @@
 # ==============================================================================
 # File: database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 1
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
+_REL_CHANGES = [18]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation with basic connection management.",
-    "Implemented the versioning and patch derivation strategy.",
-    "Added basic schema creation for MediaContent and FilePathInstances tables.",
-    "Added execute_query method to simplify database operations.",
-    "Implemented context manager methods (__enter__, __exit__) for reliable connection handling.",
-    "Improved execute_query to handle SELECT COUNT(*) returning empty results gracefully.",
-    "CRITICAL SCHEMA FIX: Added the UNIQUE constraint to the 'path' column in the FilePathInstances table definition.",
-    "CRITICAL SCHEMA FIX: Renamed the primary key of FilePathInstances from 'id' to 'file_id' to maintain consistency.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "CRITICAL SCHEMA FIX: Added the `date_modified` column to the `FilePathInstances` table.",
-    "CRITICAL API FIX: Updated `execute_query` to return the `rowcount` for non-SELECT queries.",
-    "CRITICAL SCHEMA FIX: Added `DEFAULT (DATETIME('now'))` to `FilePathInstances.date_modified`.",
-    "FEATURE: Added dump_database() method and --dump_db CLI option for quick debugging inspection.",
-    "SCHEMA MIGRATION: Added auto-detection and creation of 'new_path_id' column if missing (Fixes Deduplicator crash on legacy DBs).",
-    "PERFORMANCE: Added Indices for content_hash and is_primary to eliminate full-table scans during deduplication.",
-    "PERFORMANCE: Added execute_many() method to support high-speed batch updates.",
-    "SCHEMA MIGRATION: Added 'perceptual_hash' column to MediaContent to support near-duplicate detection."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
@@ -252,10 +236,16 @@ class DatabaseManager:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Database Manager Utility")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--dump_db', action='store_true', help='Dump the contents of the database to stdout.')
     parser.add_argument('--db', type=str, default=r"organized_media_output/metadata.sqlite", help='Path to the database file (default: organized_media_output/metadata.sqlite)')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Database Manager")

@@ -1,20 +1,10 @@
 # ==============================================================================
 # File: main.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 6
+_MINOR_VERSION = 1
+_REL_CHANGES = [12]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation.",
-    "Integrated all pipeline components (scanner, processor, deduplicator, migrator).",
-    "Added graceful version check and orchestrator logic structure.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "COMPLETE REFACTOR: Implemented full PipelineOrchestrator class.",
-    "FEATURE: Integrated FileScanner, MetadataProcessor, Deduplicator, Migrator, and Generators.",
-    "CLI: Added flags for --scan, --meta, --dedupe, --migrate, --report, and --all.",
-    "SAFETY: Added Database existence checks before running dependent stages.",
-    "FEATURE: Added --serve flag to launch the Flask Web Dashboard.",
-    "CLI: Added --db flag to override database path (useful for viewing clean_index.sqlite).",
-    "FIX: Added db.create_schema() to run_metadata, run_dedupe, and run_migrate to ensure DB schema is up-to-date when skipping the scan phase."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.6.12
@@ -150,9 +140,15 @@ if __name__ == '__main__':
     # Options
     parser.add_argument('--db', type=str, help="Override database path (e.g. for viewing export).")
     parser.add_argument('-v', '--version', action='store_true', help='Show version info.')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print_version_info(__file__, "Main Pipeline Orchestrator")
         sys.exit(0)

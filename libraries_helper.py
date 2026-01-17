@@ -1,38 +1,10 @@
 # ==============================================================================
 # File: libraries_helper.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 11
+_MINOR_VERSION = 1
+_REL_CHANGES = [30]
 _CHANGELOG_ENTRIES = [
-    "Initial creation of libraries_helper to encapsulate external library interactions.",
-    "Added utility for reporting installed library versions.",
-    "Added demo function for tqdm progress bar use.",
-    "Added function for extracting EXIF metadata using Pillow (F04 implementation detail).",
-    "Implemented CLI argument parsing for --version to allow clean exit during health checks (N06).",
-    "FEATURE UPGRADE: Added hachoir detection to get_library_versions to support video metadata.",
-    "FEATURE UPGRADE: Implemented extract_video_metadata using Hachoir (F04).",
-    "BUG FIX: Added safety checks for Hachoir tag retrieval to prevent 'Metadata has no value' errors.",
-    "RELIABILITY: Improved tag discovery to capture width, height, and bitrate more reliably.",
-    "RELIABILITY: Added recursive metadata discovery to find nested stream tags (F04).",
-    "BUG FIX: Fixed 'is_list' attribute error by using 'is_group' for recursion.",
-    "BUG FIX: Fixed 'Data' object attribute error by using flat iteration for video metadata.",
-    "BUG FIX: Fixed 'Data' object attribute error by using direct item access and exportPlaintext.",
-    "EVOLUTION: Integrated MediaInfo for professional-grade and dynamic metadata extraction.",
-    "CLI: Added --verbose argument to toggle between standard and exhaustive MediaInfo extraction.",
-    "SYNC: Refined internal logic to support external calls for verbose vs standard metadata.",
-    "BUG FIX: Changed file size extraction to return raw integers instead of formatted strings to prevent processing errors in Asset models.",
-    "FEATURE UPGRADE: Added specialized extractors for PDF, Office, Ebooks, and Archives.",
-    "FEATURE UPGRADE: Added router logic to dispatch to specific extractors based on extension.",
-    "FEATURE UPGRADE: Added support for RAW images, SVG, and PPTX metadata extraction.",
-    "FEATURE UPGRADE: Added 'pillow-heif' registration for .HEIC support.",
-    "DATA INTEGRITY: Updated MediaInfo extractor to return RAW INTEGERS for BitRate, Duration, Width, Height (Fixes sorting/reporting).",
-    "ROBUSTNESS: Added automatic fallback to MediaInfo for HEIC files if Pillow/pillow-heif fails.",
-    "FIX: Routed RAW images (.NEF, .CR2) to MediaInfo for Metadata. Pillow only reads thumbnails (160x120), MediaInfo reads true dimensions.",
-    "FEATURE: Enhanced EXIF extraction to parse ISO, F-Stop, Shutter Speed, and GPS Coordinates.",
-    "FEATURE: Implemented Deep EXIF Parsing (ExifIFD and GPSIFD) to capture Altitude, Brightness, Bias, and detailed Flash status.",
-    "CRITICAL FIX: Switched RAW Metadata extraction to 'rawpy'. MediaInfo/Pillow often read the embedded thumbnail (160x120). rawpy ensures full sensor dimensions.",
-    "BUG FIX: Added Duration extraction fallback to 'Video' track. Some containers (MKV/MPEG) only report duration on the stream, not the general container.",
-    "FIX: Added .tif extension to image routing list to ensure Pillow extraction.",
-    "FEATURE: Added 'calculate_image_hash' using ImageHash (dhash) for near-duplicate detection."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.11.31
@@ -476,7 +448,13 @@ def demo_tqdm_progress(iterable: Any = 100, desc: str = "Testing Progress Bar"):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args = parser.parse_args()
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Library Helper Utilities")

@@ -1,3 +1,11 @@
+
+# VERSIONING
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 1
+_CHANGELOG_ENTRIES = [
+    "Released as v0.1.0"
+]
+_REL_CHANGES = [1]
 import os
 import sys
 import subprocess
@@ -6,7 +14,7 @@ from config_manager import ConfigManager
 
 # --- CONFIGURATION ---
 # 1. REPLACE THIS WITH THE PATH TO THE AVI FILE THAT IS FAILING
-TEST_FILE = r"organized_media_output\2002-12-23 14.15.28 Christmas Barn Bellport.avi"
+TEST_FILE = r"organized_media_output\organized_media_output\2002\12\2002-12-23 14.15.28 Christmas Barn Bellport.avi"
 
 def get_ffmpeg_binary(config):
     settings = config.FFMPEG_SETTINGS

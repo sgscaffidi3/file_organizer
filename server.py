@@ -1,78 +1,10 @@
 # ==============================================================================
 # File: server.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 16
+_MINOR_VERSION = 1
+_REL_CHANGES = [70]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of Flask Server.",
-    "Added API endpoints for Statistics, Folder Tree, and File Data.",
-    "Implemented Server-Side Processing for DataTables (Pagination/Sorting/Filtering).",
-    "Implemented secure media serving route to bypass local file security restrictions.",
-    "Created modern Bootstrap 5 Dashboard template with dark mode.",
-    "REFACTOR: Implemented full hierarchical Folder Tree (recursive) instead of flat list.",
-    "REFACTOR: Added Type/Extension browser to Sidebar.",
-    "FIX: Added SQLite custom function 'NORM_PATH' to handle Windows/Linux path separator mismatches.",
-    "UX: Restored 3-Tab Sidebar (Browser, Types, Duplicates).",
-    "FIX: Switched JS event handling to ID-based lookup to fix broken buttons.",
-    "UX: Improved Tree rendering and CSS to ensure folder labels are visible.",
-    "LOGIC: Added explicit handling for 'Root Directory' vs 'All Files'.",
-    "FEATURE: Added Server-Side Sorting implementation for DataTables.",
-    "FEATURE: Restored Image Thumbnails in the main table.",
-    "FEATURE: Added 'Report' Tab with aggregate statistics (Charts/Tables).",
-    "FEATURE: Added 'Unique Files' filter mode.",
-    "FEATURE: Added Advanced Filters (Size, Date Year).",
-    "FIX: Resolved SyntaxError (f-string backslash) for Python < 3.12 compatibility.",
-    "REPORTING: Implemented Comprehensive Analysis (Res/Quality/Bitrate) in /api/report.",
-    "FIX: Corrected logic for Duplicate vs Redundant counts.",
-    "FIX: Improved extension normalization in Sidebar counts.",
-    "FIX: Resolved f-string backslash SyntaxError (again) by moving replacement logic out.",
-    "REPORTING: Added Image Quality (Megapixel) breakdown.",
-    "FIX: Improved Audio Bitrate parsing to handle 'kbps' strings and prevent 'Unknown' results.",
-    "UX: Renamed 'Duplicates' stat to 'Redundant Copies' for clarity.",
-    "CLI: Added --version and --help support.",
-    "FIX: Implemented special SQL logic for browsing files with no extension ('no_ext').",
-    "UX: Clarified Duplicate Table vs Stats distinction.",
-    "FEATURE: Added 'History' tab to File Inspector for viewing Original Name and Source Copies.",
-    "UX: Added Database Name indicator in Navbar to distinguish Source Scan vs Clean Export.",
-    "FEATURE: Added 'Quality' Tab to Sidebar for browsing by Resolution/Bitrate/Megapixels.",
-    "FEATURE: Added Text File Preview (.txt, .md, .csv, etc) in File Inspector.",
-    "SEARCH: Enhanced search to index 'extended_metadata', enabling search by Original Filename, Camera Model, etc.",
-    "FIX: Enforced file_type_group constraints in Quality Filters (prevents Images appearing in Video lists).",
-    "FEATURE: Added PDF Preview support via Embed.",
-    "UX: Added browser compatibility warning for non-web video formats (MKV, AVI).",
-    "PERFORMANCE: Replaced slow Python NORM_PATH function with native SQLite REPLACE() for massive speedup.",
-    "FIX: Ensured metadata API returns valid JSON string '{}' even if DB is NULL to prevent JS display errors.",
-    "REFACTOR: Separated HTML template into 'templates/dashboard.html' (Standard Flask MVC).",
-    "FEATURE: Added On-the-Fly RAW Image Conversion (NEF/CR2 -> JPEG) via rawpy.",
-    "FEATURE: Added .DOCX Text Extraction for browser preview.",
-    "FEATURE: Added On-the-Fly HEIC Image Conversion (HEIC -> JPEG) via Pillow-HEIF.",
-    "NETWORKING: Changed host to '0.0.0.0' to allow access from other computers on the LAN.",
-    "FIX: Added Cache-Busting (?t=timestamp) to image previews to force browser to load High-Res RAW conversions.",
-    "DEBUG: Added console logging for RAW conversion attempts.",
-    "FEATURE: Added On-the-Fly Video Transcoding (MKV/AVI/WMV -> MP4) using FFmpeg streaming.",
-    "FEATURE: Configurable FFmpeg binary path and arguments via organizer_config.json.",
-    "FIX: Enforced '-pix_fmt yuv420p' and '-ac 2' in FFmpeg to ensure browser compatibility.",
-    "FIX: Added robust path detection for FFmpeg to handle Folder paths vs Binary paths (fixes WinError 5).",
-    "PERFORMANCE: Added '-tune zerolatency' and '-g 60' to FFmpeg to fix browser playback timeouts.",
-    "DEBUG: Added stderr capture to FFmpeg stream to diagnose transcoding failures.",
-    "COMPATIBILITY: Forced '-profile:v baseline' and '-reset_timestamps 1' to fix Gray Screen/0:00 duration issues.",
-    "CRITICAL FIX: Set subprocess `bufsize=0` to prevent Python from holding video headers, fixing the Gray Screen hanging issue.",
-    "DEBUG: Implemented threaded stderr reader to print FFmpeg logs to console in real-time.",
-    "FIX: Resolved absolute path for FFmpeg input to prevent 'No such file' errors on nested directories.",
-    "DEBUG: Simplified stderr handling to write directly to sys.stderr for immediate feedback.",
-    "PERFORMANCE: Removed -analyzeduration/-probesize flags which were causing startup hangs on large files.",
-    "CRITICAL FIX: Set `cwd` in subprocess to FFmpeg binary directory to ensure DLLs are found.",
-    "FEATURE: Added `ffprobe` detection and HEVC/H.265 detection to force transcoding for 'Audio Only' MP4s.",
-    "COMPATIBILITY: Added .mpg, .mpeg, and .mpe to mandatory transcoding list.",
-    "FEATURE: Added /api/map endpoint to serve GPS coordinates from metadata.",
-    "FEATURE: Added /api/update_notes endpoint to write User Notes into JSON metadata.",
-    "FEATURE: Added /api/export_db endpoint to download the SQLite database.",
-    "PERFORMANCE: Implemented Auto-Detection for NVIDIA GPU (h264_nvenc).",
-    "PERFORMANCE: Added adaptive transcoding logic to swap 'libx264' with 'h264_nvenc' and adjust flags (crf->cq, preset->p1) automatically.",
-    "UX: Added automatic LAN IP detection to print the actual network URL on startup.",
-    "FEATURE: Added On-the-Fly TIFF to JPEG conversion to allow .tif/.tiff previews in browser.",
-    "FEATURE: Added /api/visual_dupes endpoint to serve grouped Perceptual Hash matches.",
-    "FIX: Added .tif and .tiff to conversion list (handled by Pillow) to fix broken previews in browser.",
-    "CONFIG: Enabled TEMPLATES_AUTO_RELOAD to prevent caching of dashboard UI updates."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.16.70
@@ -837,7 +769,13 @@ def run_server(config_manager):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Media Organizer Web Server")
     parser.add_argument('-v', '--version', action='store_true', help='Show version info.')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args = parser.parse_args()
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Web Server")

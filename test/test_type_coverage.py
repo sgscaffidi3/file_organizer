@@ -1,17 +1,14 @@
 # ==============================================================================
 # File: test/test_type_coverage.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 1
 _PATCH_VERSION = 2
 # Version: 0.7.2
 # ------------------------------------------------------------------------------
 # CHANGELOG:
+_REL_CHANGES = [5]
 _CHANGELOG_ENTRIES = [
-    "Initial creation of Type Coverage suite (TDD Step 1: Red Phase).",
-    "Added tests for Document (PDF, DOCX) metadata expectations.",
-    "REFACTOR: Implemented Mocking for MediaInfo, Pillow, and Rawpy to test logic without real binary assets.",
-    "FIX: Updated MediaInfo mock to correctly simulate track data structure (Fixes Duration failures).",
-    "RESTORED: Added back individual test methods for all file types (3GP, AAC, FLAC, etc.) to ensure full coverage report."
+    "Released as v0.1.0"
 ]
 # ------------------------------------------------------------------------------
 import unittest
@@ -149,8 +146,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args, unknown = parser.parse_known_args()
     
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Type Coverage Tests")

@@ -1,20 +1,10 @@
 # ==============================================================================
 # File: migrator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 9
+_MINOR_VERSION = 1
+_REL_CHANGES = [12]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of Migrator class, handling file copy operations (F07) and adhering to DRY_RUN_MODE (N03).",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "UX: Added TQDM progress bar for migration feedback.",
-    "PERFORMANCE: Replaced N+1 query loop with a single SQL JOIN to instantly load migration jobs.",
-    "FEATURE: Implemented 'Clean Database Export'. Creates a new SQLite DB reflecting the organized structure.",
-    "LOGIC: Added automatic 'clean_index.sqlite' generation during Live Run.",
-    "FEATURE: Inject 'Original_Filename' and 'Source_Copies' list into extended_metadata for Clean DB export.",
-    "BUG FIX: Fixed path concatenation logic to prevent double-nesting of output directory.",
-    "UX: Cleaned up relative paths in exported DB so Tree View starts at the Year.",
-    "PERFORMANCE: Implemented Multithreaded Copying using ThreadPoolExecutor.",
-    "PERFORMANCE: Optimized Path History Map building with TQDM feedback."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.9.12
@@ -239,9 +229,15 @@ if __name__ == "__main__":
     manager = ConfigManager()
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--migrate', action='store_true')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print_version_info(__file__, "File Migration Handler")
         sys.exit(0)

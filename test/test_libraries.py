@@ -1,15 +1,10 @@
 # ==============================================================================
 # File: test/test_libraries.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 1
+_REL_CHANGES = [7]
 _CHANGELOG_ENTRIES = [
-    "Initial creation of test_libraries.py to validate external library helpers.",
-    "Implemented test for version reporting (get_library_versions).",
-    "Implemented test for TQDM progress bar wrapper.",
-    "Implemented test for Pillow metadata extraction with a non-existent file path.",
-    "Implemented test for standalone CLI version check (N06).",
-    "BUG FIX: Updated error key assertions to match granular error keys (Pillow_Error) introduced in libraries_helper v0.4.19.",
-    "FIX: Added missing 'import argparse' to support clean exit for version check."
+    "Released as v0.1.0"
 ]
 # ------------------------------------------------------------------------------
 import re
@@ -137,8 +132,14 @@ class TestLibrariesHelper(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args, unknown = parser.parse_known_args()
     
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         try:
             from version_util import print_version_info

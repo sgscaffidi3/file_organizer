@@ -1,19 +1,13 @@
 # ==============================================================================
 # File: test_database_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 1
 # Version: <Automatically calculated via dynamic import of target module>
 # ------------------------------------------------------------------------------
 # CHANGELOG:
+_REL_CHANGES = [8]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation.",
-    "Updated to use DatabaseManager's context manager functionality.",
-    "Implemented a test for FOREIGN KEY constraint enforcement (test_03).",
-    "Corrected test path definitions to use pathlib correctly relative to the project root.",
-    "Added tearDown method to ensure the DB file is removed after every test method for strict isolation.",
-    "CRITICAL FIX: Corrected tearDown method to access db_path using the class name (TestDatabaseManager.db_path) instead of self.db_path, resolving AttributeError errors.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check."
+    "Released as v0.1.0"
 ]
 # ------------------------------------------------------------------------------
 import unittest
@@ -135,9 +129,15 @@ if __name__ == '__main__':
     #  ARGUMENT PARSING
     parser = argparse.ArgumentParser(description="Unit tests for DatabaseManager.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args = parser.parse_args()
 
     # 3. VERSION EXIT
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print_version_info(__file__, "DatabaseManager Unit Tests")
         sys.exit(0)

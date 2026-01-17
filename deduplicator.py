@@ -1,22 +1,10 @@
 # ==============================================================================
 # File: deduplicator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 8
+_MINOR_VERSION = 1
+_REL_CHANGES = [14]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of Deduplicator class, handling primary copy selection (F06) and path calculation (F05).",
-    "Updated _select_primary_copy to return a tuple (path, file_id) to support final path naming.",
-    "Refactored final path calculation to include the primary copy's file_id in the filename (HASH_FILE_ID.EXT).",
-    "Added CLI argument parsing for --version to allow clean exit during health checks.",
-    "CRITICAL FIX: Modified _calculate_final_path to prepend OUTPUT_DIR, returning the full absolute path.",
-    "CRITICAL FIX: Updated _select_primary_copy to read 'date_modified' from FilePathInstances, prioritizing DB time over file stat() to support tests.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Added logic to enforce a clean exit (sys.exit(0)) when running the --version check.",
-    "CRITICAL FIX: Updated `_calculate_final_path` signature to match the requirements of `test_deduplicator.py` (`ext` and `primary_file_id`).",
-    "UX: Added TQDM progress bar for deduplication feedback.",
-    "PERFORMANCE: Rewrote Deduplicator to use Batch Processing (Vectorization) instead of iterative DB calls. Speed improvement ~100x.",
-    "FEATURE: Added support for 'rename_on_copy' config. If False, preserves original filename unless collision occurs.",
-    "BUG FIX: Changed date fallback logic. If date_best is missing, use file_system_date (date_modified) instead of Today/2026.",
-    "FIX: Added missing 'import sys' to support clean exit for version check."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.8.14
@@ -186,9 +174,15 @@ class Deduplicator:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--dedupe', action='store_true')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Deduplicator and Path Calculator")

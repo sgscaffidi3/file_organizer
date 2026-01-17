@@ -1,22 +1,10 @@
 # ==============================================================================
 # File: version_util.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 5
+_MINOR_VERSION = 1
+_REL_CHANGES = [14]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation.",
-    "Updated print_version_info to handle file reading for version detection.",
-    "Implemented 'utf-8' encoding on file reads.",
-    "Refactored versioning logic to use dynamic import of '_CHANGELOG_ENTRIES' list for patch determination (length of the list).",
-    "Removed all comment-parsing logic, ensuring reliability of patch number calculation.",
-    "Added 'import sys' and 'sys.exit(0)' to self-check for clean exit.",
-    "Minor version bump to 0.3 to synchronize with highest version in the project.",
-    "Added --get_all command to audit the version and format status of all files.",
-    "CRITICAL FIX: Updated VERSION_CHECK_FILES to correctly locate test files within the 'test' subdirectory.",
-    "Formatting fix: Increased the width of the 'FILE' column in the --get_all audit output.",
-    "REFACTOR: Removed hardcoded file list. Implemented dynamic recursive scanning for .py files.",
-    "FEATURE: Added --get_change_counts command to report historical changes using _REL_CHANGES list.",
-    "LOGIC: Update audit to check if MINOR_VERSION matches the Master Config.",
-    "FEATURE: Added print_change_history() to support the new --changes CLI flag across the project."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: <Automatically calculated via dynamic import of target module>

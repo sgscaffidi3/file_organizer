@@ -1,25 +1,10 @@
 # ==============================================================================
 # File: metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 13
+_MINOR_VERSION = 1
+_REL_CHANGES = [17]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of MetadataProcessor class (F04).",
-    "PRODUCTION UPGRADE: Integrated Pillow and Hachoir for extraction.",
-    "RELIABILITY: Added safety handling for missing physical files.",
-    "ARCHITECTURE REFACTOR: Migrated to Hybrid Metadata model via AssetManager.",
-    "CLEANUP: Removed redundant local extractors; delegated all routing to AssetManager.",
-    "FEATURE: Enabled full support for VIDEO, IMAGE, AUDIO, and DOCUMENT groups.",
-    "UX: Added TQDM progress bar for real-time extraction feedback.",
-    "BUG FIX: Updated _get_files_to_process query to prevent infinite re-processing of Audio/Docs.",
-    "PERFORMANCE: Implemented Multithreaded Metadata Extraction using ThreadPoolExecutor.",
-    "PERFORMANCE: Implemented Batch Database Writes (1000/batch) to fix SQLite locking issues.",
-    "DATA SAFETY: Modified SQL UPDATE to use COALESCE, preventing NULL dates from overwriting valid file system dates.",
-    "FIX: Added missing 'import argparse' to support clean exit for version check.",
-    "FEATURE: Added Perceptual Hash (dhash) calculation to the processing loop for Images.",
-    "RELIABILITY: Reduced DB_BATCH_SIZE to 50 and added KeyboardInterrupt handler for better resumability.",
-    "CRITICAL FIX: Explicitly handle failed hash calculations by setting perceptual_hash to 'UNKNOWN' instead of NULL, preventing infinite processing loops.",
-    "UX: Added startup stats to show Total vs Remaining files.",
-    "UX: Added 'flush=True' to print statements to ensure immediate visibility."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.13.17
@@ -198,9 +183,15 @@ class MetadataProcessor:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--process', action='store_true')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Metadata Processor")

@@ -1,16 +1,10 @@
 # ==============================================================================
 # File: test/test_deduplicator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 1
+_REL_CHANGES = [8]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation.",
-    "CRITICAL FIX: Implemented logic to correctly set `is_primary=1`.",
-    "CRITICAL FIX: Updated `setUp` to create mock files with unique `mtime`.",
-    "CRITICAL TEST FIX: Refined test data arguments.",
-    "TEST REFACTOR: Removed obsolete test for `_select_primary_copy` (logic is now in batch query).",
-    "TEST REFACTOR: Updated `_calculate_final_path` test to match new signature (6 arguments).",
-    "TEST REFACTOR: Verified database state for `run_deduplication` test.",
-    "TEST FIX: Forced 'rename_on_copy' preference to True in test_02 to ensure deterministic path generation."
+    "Released as v0.1.0"
 ]
 # ------------------------------------------------------------------------------
 import unittest
@@ -132,8 +126,14 @@ class TestDeduplicator(unittest.TestCase):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args, unknown = parser.parse_known_args()
     
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         try:
             from version_util import print_version_info

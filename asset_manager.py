@@ -1,13 +1,10 @@
 # ==============================================================================
 # File: asset_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
+_MINOR_VERSION = 1
+_REL_CHANGES = [5]
 _CHANGELOG_ENTRIES = [
-    "Initial creation of AssetManager to coordinate asset processing.",
-    "Integrated libraries_helper for metadata extraction.",
-    "Implemented the Hybrid Metadata storage strategy into the database.",
-    "Added support for --verbose flag to trigger exhaustive MediaInfo scans.",
-    "FEATURE: Added calculation of Perceptual Hash (dhash) for IMAGE type assets."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.2.5
@@ -74,9 +71,15 @@ if __name__ == "__main__":
     from version_util import print_version_info
     parser = argparse.ArgumentParser(description="Asset Manager Conductor")
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--verbose', action='store_true', help='Store exhaustive metadata blobs.')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print_version_info(__file__, "Asset Manager")
         sys.exit(0)

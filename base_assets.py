@@ -1,16 +1,10 @@
 # ==============================================================================
 # File: base_assets.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
+_MINOR_VERSION = 1
+_REL_CHANGES = [8]
 _CHANGELOG_ENTRIES = [
-    "Initial creation of base_assets module with class inheritance.",
-    "Implemented GenericFileAsset, AudioAsset, DocumentAsset, and ImageAsset.",
-    "Standardized JSON 'backpack' across all asset types.",
-    "Added project-standard versioning and CLI --version support.",
-    "Added _clean_numeric helper for ImageAsset dimension scrubbing.",
-    "FEATURE: Added get_friendly_size() for dynamic unit scaling (B, KiB, MiB, GiB).",
-    "FEATURE: Expanded AudioAsset to capture Artist, Album, Song, VBR, and technical specs.",
-    "BUG FIX: Added 'camera' attribute to ImageAsset to capture Make/Model metadata (Fixes test_assets error)."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # ------------------------------------------------------------------------------
@@ -93,8 +87,14 @@ class DocumentAsset(GenericFileAsset):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Base Asset Models")
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)

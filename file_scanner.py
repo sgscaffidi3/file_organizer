@@ -1,27 +1,10 @@
 # ==============================================================================
 # File: file_scanner.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 7
+_MINOR_VERSION = 1
+_REL_CHANGES = [19]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of high-performance file hashing and scanning logic (F01).",
-    "Implemented incremental hashing using SHA256 (N01).",
-    "Refactored scan logic to query file stats (size, modified date) before hashing, allowing fast skip of unchanged files (F02).",
-    "Added support for configurable file groups (IMAGE, VIDEO, etc.) from ConfigManager.",
-    "Implemented the insertion of MediaContent and FilePathInstances records.",
-    "Refined path normalization to ensure absolute paths for database storage.",
-    "Optimized file skipping for files already present in the database with matching size/mtime.",
-    "FIX: The final path insertion uses the full path for the `path` column, explicitly ensuring correct behavior.",
-    "CRITICAL FIX: Explicitly listed all column names in the FilePathInstances INSERT OR IGNORE statement to ensure SQLite correctly enforces the UNIQUE constraint on the 'path' column.",
-    "DEFINITIVE FIX: Re-verified the explicit column listing in FilePathInstances INSERT OR IGNORE to ensure SQLite's UNIQUE constraint on 'path' is enforced.",
-    "CRITICAL TEST FIX: Modified the insertion logic in `scan_and_insert` to ensure `self.files_inserted_count` is incremented accurately.",
-    "UX: Added TQDM progress bar for real-time scanning feedback.",
-    "REVERT: Removed nested byte-level progress bar as per user request.",
-    "PERFORMANCE: Implemented RAM Cache for _check_if_known_and_unchanged to enable Fast Resume.",
-    "UX: Re-implemented Nested Byte-Level Progress Bar for large file visibility.",
-    "PERFORMANCE: Implemented Multithreaded Hashing using ThreadPoolExecutor (producer-consumer model).",
-    "UX: Implemented Position Pool to allow multiple progress bars (one per thread) simultaneously.",
-    "PERFORMANCE: Added 'Smart UI Threshold'. Only files > 50MB get a dedicated progress bar to prevent UI lag on small files.",
-    "PERFORMANCE: Implemented Batch Database Commits (1000 records/batch) to eliminate disk IO latency."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.7.20
@@ -255,9 +238,15 @@ if __name__ == "__main__":
     manager = ConfigManager()
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--scan', action='store_true')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print_version_info(__file__, "File Scanner")
         sys.exit(0)

@@ -1,37 +1,10 @@
 # ==============================================================================
 # File: html_generator.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 8
+_MINOR_VERSION = 1
+_REL_CHANGES = [29]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of HTMLGenerator class.",
-    "Added DataTables integration and Metadata Inspector.",
-    "FEATURE: Added Hierarchical Folder Browser sidebar.",
-    "FEATURE: Added dynamic folder-based filtering logic.",
-    "FIX: Robust path handling for Python versions < 3.12.",
-    "FIX: Restored missing CLI arguments (--version, --db).",
-    "FEATURE: implemented Collapsible Folder Tree using <details> tags.",
-    "FEATURE: Added 'Type View' (Browse by Media/Extension).",
-    "FEATURE: Added 'Duplicates View' (Browse by Hash Collision).",
-    "FIX: Restored vertical scrolling (overflow-y) to Metadata Modal window.",
-    "FIX: Added explicit 'Root Directory' item in sidebar for files at base level.",
-    "FIX: Added JS safety checks to metadata modal to prevent 'silent' failures.",
-    "FIX: Added 'formatSize' utility to metadata inspector for human-readable sizes.",
-    "FIX: Added video playback fallback message for browser/CORS compatibility issues.",
-    "FIX: Resolved SyntaxError by removing f-string escaping issues in HTML generation.",
-    "FIX: Restored missing --generate CLI argument and generation logic.",
-    "FIX: Resolved ValueError by separating CSS/JS from .format() template parsing.",
-    "FIX: Switched to simple string concatenation for final HTML to prevent JS corruption.",
-    "FIX: Replaced onclick data-passing with HTML5 data-attributes to fix Metadata Modal.",
-    "FIX: Resolved f-string backslash SyntaxError and restored missing sidebar variables.",
-    "PERFORMANCE: Switched from string concatenation to list buffering for row generation (O(n) vs O(n^2)).",
-    "UX: Added TQDM progress bar for HTML generation feedback.",
-    "ARCHITECTURE: Switched to Client-Side Rendering (JSON Island) for massive performance gain on 100k+ files.",
-    "UX: Added Dashboard Summary Cards (Total Size, Wasted Space, etc).",
-    "UX: Implemented Lazy Loading for media previews to prevent browser hangs.",
-    "UX: Added Dedicated Duplicate Report tab.",
-    "BUG FIX: Defined hidden DataTables columns for Folder, Extension, and Hash to enable Sidebar Filtering.",
-    "FIX: Explicitly implemented CLI version print to support test runner audit.",
-    "FIX: Updated version print format to 'Version: X.Y.Z' to satisfy test auditor regex."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.8.29

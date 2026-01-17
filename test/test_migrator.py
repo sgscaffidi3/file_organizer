@@ -1,3 +1,11 @@
+
+# VERSIONING
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 1
+_CHANGELOG_ENTRIES = [
+    "Released as v0.1.0"
+]
+_REL_CHANGES = [1]
 # ==============================================================================
 # File: test/test_migrator.py
 _MAJOR_VERSION = 0
@@ -125,8 +133,14 @@ class TestMigrator(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args, unknown = parser.parse_known_args()
     
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         try:
             from version_util import print_version_info

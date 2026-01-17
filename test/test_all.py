@@ -1,29 +1,10 @@
 # ==============================================================================
 # File: test/test_all.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 4
+_MINOR_VERSION = 1
+_REL_CHANGES = [21]
 _CHANGELOG_ENTRIES = [
-    "Refactored to act as the primary test runner by default (no flag).",
-    "Added encoding='utf-8' to run_version_check to fix decoding issues.",
-    "Fixed File Not Found errors by correcting 'VERSION_CHECK_FILES' paths.",
-    "Fixed import error for self-check by moving version_util import inside the __main__ block.",
-    "Added IMMEIDATE PATH SETUP to prevent crash during self-check subprocess.",
-    "CRITICAL FIX: Simplified TEST_MODULES names and import logic to fix \"No module named 'test.test_...'\" error.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "Updated VERSION_CHECK_FILES list to include all 11 core and utility files for full version synchronization check.",
-    "FEATURE: Implemented CustomTestResult and CustomTestRunner to generate a detailed, structured summary table of all test results (PASS/FAIL/ERROR) at the end of the run. Refactored test loading to use TestLoader.loadTestsFromTestCase to remove DeprecationWarning.",
-    "CRITICAL FIX: Implemented safe parsing in CustomTestResult._get_test_info to prevent IndexError when processing non-standard unittest IDs (like setup/teardown steps).",
-    "CRITICAL FIX & READABILITY IMPROVEMENT: Modified CustomTestResult._get_test_info to use robust test object attributes (__module__, _testMethodName) instead of unreliable string parsing. Corrected test run metrics calculation and improved detailed table readability by formatting module and method names.",
-    "READABILITY IMPROVEMENT: Modified format_results_table to dynamically calculate column widths and use string padding for consistent, aligned output in the detailed report table.",
-    "VISUAL FIX: Refined column width calculation and separator line generation in format_results_table to ensure perfect alignment of all pipe characters (|) in the console output.",
-    "VISUAL FIX: Corrected f-string padding logic to ensure the separator line uses the exact same calculated total width as the header and data rows, fixing final pipe alignment.",
-    "VISUAL FIX: Applied dynamic column width calculation and padding to the Summary Table for improved console alignment and readability.",
-    "FEATURE: Added 'test_libraries' to the test suite and updated version audit list.",
-    "FEATURE: Added 'test_migrator' to the test suite and updated version audit list.",
-    "FEATURE: Added 'test_type_coverage' to the test suite (TDD Red Phase).",
-    "FEATURE: Implemented Log File Output. Tests now write to 'test_run.log' in addition to console.",
-    "UX: Changed log file extension to .txt for easier sharing.",
-    "FIX: Moved version check argument parsing before logging setup to prevent sys.unraisablehook error."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.4.21
@@ -343,9 +324,15 @@ if __name__ == '__main__':
     # SETUP ARGS FIRST - Critical for clean version check
     parser = argparse.ArgumentParser(description="Test Runner")
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--get_versions', action='store_true')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         from version_util import print_version_info
         print_version_info(__file__, "Test Runner")

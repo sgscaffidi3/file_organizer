@@ -1,3 +1,11 @@
+
+# VERSIONING
+_MAJOR_VERSION = 0
+_MINOR_VERSION = 1
+_CHANGELOG_ENTRIES = [
+    "Released as v0.1.0"
+]
+_REL_CHANGES = [1]
 # ==============================================================================
 # File: reset_raw.py
 # Utility to force re-processing of RAW files

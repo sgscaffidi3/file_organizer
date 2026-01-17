@@ -1,16 +1,10 @@
 # ==============================================================================
 # File: config_manager.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 1
+_REL_CHANGES = [8]
 _CHANGELOG_ENTRIES = [
-    "Initial creation to manage dynamic settings loaded from a JSON file.",
-    "Project name changed to \"file_organizer\" in descriptions.",
-    "Added CLI argument parsing for --version to allow clean exit during health checks.",
-    "Minor version bump to 0.3 and refactored changelog to Python list for reliable versioning.",
-    "CRITICAL FIX: Added optional `output_dir` to `__init__` to enable test environment isolation, resolving `AttributeError` in test suite setup.",
-    "CRITICAL IMPORT FIX: Moved `argparse` and `sys` imports to the `if __name__ == '__main__':` block to prevent dynamic import crashes.",
-    "FEATURE: Added FFMPEG_SETTINGS property to expose video transcoding configuration.",
-    "FEATURE: Added PROJECT_VERSION property to access the master version tuple."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.3.8
@@ -105,8 +99,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Config Manager for file_organizer: Loads and validates project settings from JSON.")
     parser.add_argument('-v', '--version', action='store_true', help='Show version information and exit.')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print_version_info(__file__, "Configuration Manager")
         sys.exit(0)

@@ -2,15 +2,9 @@
 # File: test/test_assets.py
 _MAJOR_VERSION = 0
 _MINOR_VERSION = 1
+_REL_CHANGES = [8]
 _CHANGELOG_ENTRIES = [
-    "Initial creation of TestAssetArchitecture suite.",
-    "Added data cleaning validation for VideoAsset attributes.",
-    "Implemented aspect ratio and JSON backpack verification.",
-    "Integrated project-standard versioning and --version CLI support.",
-    "CRITICAL: Added sys.path bootstrapping to resolve ModuleNotFoundError in subdirectories.",
-    "Added Integration Test for AssetManager using Mock Database patterns.",
-    "FEATURE: Added Test #04 for missing data resilience (Corrupt File handling).",
-    "FIX: Updated db integration test to account for new 'perceptual_hash' column index."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.1.8
@@ -112,8 +106,14 @@ class TestAssetArchitecture(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args, unknown = parser.parse_known_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         try:
             from version_util import print_version_info

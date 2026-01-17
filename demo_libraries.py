@@ -2,19 +2,10 @@
 # File: demo_libraries.py
 # ------------------------------------------------------------------------------
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 1
+_REL_CHANGES = [11]
 _CHANGELOG_ENTRIES = [
-    "Initial creation and evolution of demo suite.",
-    "Integrated DatabaseManager for persistence.",
-    "Implemented Smart Update logic with field-level change detection.",
-    "Added --debug option for exhaustive metadata printing.",
-    "FEATURE: Implemented Nested Progress Bars (Overall + Per-File Hashing).",
-    "RESTORED: --version support and fixed execution flow.",
-    "FEATURE: Added recursive scanning and relative path preservation for subdirs.",
-    "REFACTOR: Switched to using internal AudioAsset from base_assets.py.",
-    "FEATURE: Implemented per-file database commits to allow resume-on-cancel.",
-    "OPTIMIZATION: Added Fast-Skip logic (Path+Size check) to avoid redundant hashing.",
-    "FEATURE: Added double-hash verification for mismatched files."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.3.22
@@ -82,10 +73,16 @@ def compare_metadata(old_meta: dict, new_meta: dict) -> list:
 def run_demo():
     parser = argparse.ArgumentParser(description="High-Performance Resumable Media Scanner")
     parser.add_argument('-v', '--version', action='store_true', help="Show version and exit")
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--debug', action='store_true', help="Enable debug output")
     args = parser.parse_args()
 
     # --- RESTORED VERSION SUPPORT ---
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)

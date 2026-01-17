@@ -1,16 +1,14 @@
 # ==============================================================================
 # File: test/test_metadata_processor.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 3
+_MINOR_VERSION = 1
 _PATCH_VERSION = 22
 # Version: 0.3.22
 # ------------------------------------------------------------------------------
 # CHANGELOG:
+_REL_CHANGES = [4]
 _CHANGELOG_ENTRIES = [
-    "FIX: Updated Test 02 to provide both width and height to mock skipped record.",
-    "RELIABILITY: Maintained Deep Asset Check for required test files.",
-    "SYNC: Matched all logic with MetadataProcessor v0.3.23.",
-    "FIX: Updated DB inserts to include 'perceptual_hash' so skipped records are correctly ignored."
+    "Released as v0.1.0"
 ]
 # ------------------------------------------------------------------------------
 import unittest, os, shutil, sqlite3, sys, argparse
@@ -125,8 +123,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--gen_test_data', action='store_true')
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     args, unknown = parser.parse_known_args()
     
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         try:
             from version_util import print_version_info

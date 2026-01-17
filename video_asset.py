@@ -1,14 +1,10 @@
 # ==============================================================================
 # File: video_asset.py
 _MAJOR_VERSION = 0
-_MINOR_VERSION = 2
+_MINOR_VERSION = 1
+_REL_CHANGES = [6]
 _CHANGELOG_ENTRIES = [
-    "Initial implementation of VideoAsset model.",
-    "Integrated MediaInfo for professional stream-level parsing.",
-    "Added support for DV/DVCPRO camera and tape metadata mapping.",
-    "ARCHITECTURE REFACTOR: Now inherits from GenericFileAsset for shared behavior.",
-    "FEATURE: Support for get_friendly_size() via base class inheritance.",
-    "RESTORED: Re-integrated audio codecs, bitrates, and aspect ratio logic lost in refactor."
+    "Released as v0.1.0"
 ]
 _PATCH_VERSION = len(_CHANGELOG_ENTRIES)
 # Version: 0.2.6
@@ -79,9 +75,15 @@ class VideoAsset(GenericFileAsset):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Video Asset Model")
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--changes', nargs='?', const='all', help='Show changelog history.')
     parser.add_argument('--test', action='store_true')
     args = parser.parse_args()
 
+    
+    if hasattr(args, 'changes') and args.changes:
+        from version_util import print_change_history
+        print_change_history(__file__, args.changes)
+        sys.exit(0)
     if args.version:
         print(f"Version: {_MAJOR_VERSION}.{_MINOR_VERSION}.{_PATCH_VERSION}")
         sys.exit(0)
